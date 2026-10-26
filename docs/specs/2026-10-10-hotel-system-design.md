@@ -256,8 +256,28 @@ Preduslovi: Admin Panel faze 0–1 i `fiscal-rs` (faza 5) iz spec-a platforme.
 ## 12. Otvorena pitanja (ne blokiraju fazu 1)
 
 1. Izbor channel managera (otvoren API, sertifikacije, cena po objektu) — pre faze 4.
-2. e-Turista: uslovi API pristupa za proizvođače softvera — pre faze 1 (određuje da li je rezerva sa izvozom potrebna odmah).
+2. ~~e-Turista: uslovi API pristupa~~ — odlučeno 2026-10-26, vidi §13.1. Ostaje: dobiti dokumentaciju i test nalog od ministarstva pre puštanja u rad.
 3. Payment gateway za kartice — pre faze 3.
 4. Proizvođači pametnih brava i enkodera koje prvo podržavamo — pre faze 5.
 5. Pravno: u čije ime agencija izdaje račun za stan vlasnika fizičkog lica i ko je obveznik prijave i takse — potvrditi sa knjigovođom pre faze 5; softver podržava oba podešavanja.
 6. WhatsApp: Business API provider — pre faze 5.
+7. Fiskalizacija: kako se boravišna taksa prikazuje na fiskalnom računu (posebna stavka i oznaka ili van računa) i potvrda da fizičko lice u domaćoj radinosti nije obveznik fiskalizacije — potvrditi sa knjigovođom pre puštanja faze 1 u rad; softver podržava oba podešavanja.
+
+## 13. Odluke posle istraživanja (2026-10-26)
+
+### 13.1 e-Turista
+
+- **Stanje:** integracija preko web servisa postoji (domaći proizvođači hotelskog softvera šalju prijave i odjave iz svojih programa), ali javne dokumentacije za proizvođače nema. Pristup i test okruženje dobijaju se od ministarstva nadležnog za turizam; portal je `eturista.gov.rs`.
+- **Odluka:** faza 1 ne čeka API. `hotel.eturista` radi kroz adapter `ETuristaProvider` sa dve implementacije:
+  - `ExportProvider` (prva, puna funkcija): lista za ručni unos po objektu i danu, sa svim poljima koja portal traži; recepcija označava gosta kao unetog, a status po gostu (`pending` | `sent` | `failed` | `not_required`) i noćni audit rade isto kao sa API-jem.
+  - `WebServiceProvider`: dodaje se kada stigne dokumentacija; outbox, idempotentnost i ponavljanje su isti kao za ostale integracije (§7).
+- Polja gosta u §5.4 već pokrivaju domaće (JMBG) i strane goste (putna isprava); konačan spisak obaveznih polja proverava se sa dokumentacijom.
+- **Akcija vlasnika:** zatražiti od ministarstva dokumentaciju web servisa i test nalog za proizvođača softvera.
+
+### 13.2 Fiskalizacija
+
+- **Stanje:** POS ima PFR/ESIR klijent (`apps/site-gateway/src/components/fiscal` u POS repou): tipovi zahteva i odgovora, HTTP provider prema lokalnom L-PFR/V-PFR, mock, klasifikacija grešaka (ponoviti ili ne) i ključ idempotentnosti `RequestId`. Tipovi i provider ne zavise od POS baze; servis je vezan za SQLite POS-a. Kod nije sertifikovan i nikad nije radio protiv pravog PFR-a.
+- **Odluka:** zajednički deo se izdvaja u `@platform/fiscal-rs` u `platform-kit` (tipovi, HTTP i mock provider, greške, pravila za avans, konačni račun i storno). Hotel ga koristi od faze 1; POS prelazi na paket kada vlasnik odluči, bez žurbe. Kopiranje koda u hotel se ne radi: dve verzije zakonski osetljivog koda bi se razišle. Izdvajanje je zaseban zadatak u `platform-kit` repou i ne dira POS repo.
+- **Hotelski tok:** depozit i plaćanje unapred → avansni račun (`Advance`); check-out → konačni račun (`Normal`) koji zatvara avanse preko `referentDocumentNumber`; ispravka → `Refund`. Poreske oznake dolaze iz profila objekta, nikad iz koda.
+- **Po pravnom profilu:** pravno lice i preduzetnik koji naplaćuju fizičkim licima → fiskalizacija obavezna (`fiscal_compliance_mode = required`: bez uspešnog računa plaćanje se ne zatvara, §4.2); promet samo firmama → faktura i SEF, bez fiskalnog računa; fizičko lice u domaćoj radinosti → nije obveznik (`disabled`), uz potvrdu knjigovođe (§12.7).
+- **Pre puštanja u rad (ne blokira razvoj):** ESIR mora proći proveru Poreske uprave i biti na njenoj listi, uz test sa pravim V-PFR/L-PFR. Isto važi za POS, pa se sertifikacija radi jednom za zajednički paket.
