@@ -53,6 +53,19 @@ licencama i za POS i za hotel. Kvar u njemu pogađa oba proizvoda, zato:
    hotelskom kontejneru, nikad kroz `docker run`.
 5. **Testovi** koriste posebnu test bazu hotela (tmpfs), nikad razvojnu ni bazu drugog projekta.
 
+### Pokretanje i ažuriranje `claude-hotel`
+
+- Kod: `git archive HEAD | ssh … "tar -x -C /volume1/ci/hotel/src"` (pre toga `rm -rf` samo
+  `/volume1/ci/hotel/src`).
+- Lozinke: `/volume1/ci/hotel/hotel.env` (`600`, nasumične, napravljene 2026-10-26). Pravi se samo jednom
+  i posle se ne menja, jer baze već imaju podatke sa tim lozinkama. Lozinke se ne ispisuju i ne kopiraju
+  u repo.
+- Pokretanje: `/usr/local/bin/docker compose -f /volume1/ci/hotel/src/infrastructure/docker/docker-compose.yml
+  --env-file /volume1/ci/hotel/hotel.env up -d --wait`.
+- Redis nema lozinku; dostupan je samo na `127.0.0.1` NAS-a i u mreži `hotel-network-claude`.
+- Provera lozinke radi se preko Docker mreže (iz drugog kontejnera). Unutar Postgres kontejnera
+  `127.0.0.1` prolazi bez lozinke, pa test tu ne dokazuje ništa.
+
 ## Portovi
 
 Novi servis dobija sledeći slobodan port iz opsega `4200–4299` i upisuje se u tabelu, `.env.example` i
