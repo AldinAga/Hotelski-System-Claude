@@ -1,0 +1,85 @@
+# Lokalna razvojna infrastruktura hotelskog sistema.
+# Projekt, kontejneri, volume-i i mreža imaju prefiks hotel- da se ne sudaraju sa POS-om (ugpos-*).
+name: hotel
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hotel-postgres
+    restart: unless-stopped
+    ports:
+      - '${HOTEL_POSTGRES_PORT:-5442}:5432'
+    environment:
+      POSTGRES_DB: ${HOTEL_POSTGRES_DB:-hotel}
+      POSTGRES_USER: ${HOTEL_POSTGRES_USER:-hotel}
+      POSTGRES_PASSWORD: ${HOTEL_POSTGRES_PASSWORD:-hotel_dev}
+    volumes:
+      - hotel-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${HOTEL_POSTGRES_USER:-hotel} -d ${HOTEL_POSTGRES_DB:-hotel}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hotel-network
+
+  # Hub ima sopstvenu bazu i nikad ne čita bazu instalacije (spec §3).
+  hub-postgres:
+    image: postgres:16-alpine
+    container_name: hotel-hub-postgres
+    restart: unless-stopped
+    ports:
+      - '${HOTEL_HUB_POSTGRES_PORT:-5443}:5432'
+    environment:
+      POSTGRES_DB: ${HOTEL_HUB_POSTGRES_DB:-hotel_hub}
+      POSTGRES_USER: ${HOTEL_HUB_POSTGRES_USER:-hotel_hub}
+      POSTGRES_PASSWORD: ${HOTEL_HUB_POSTGRES_PASSWORD:-hotel_hub_dev}
+    volumes:
+      - hotel-hub-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${HOTEL_HUB_POSTGRES_USER:-hotel_hub} -d ${HOTEL_HUB_POSTGRES_DB:-hotel_hub}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hotel-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: hotel-redis
+    restart: unless-stopped
+    ports:
+      - '${HOTEL_REDIS_PORT:-6390}:6379'
+    command: redis-server --appendonly yes
+    volumes:
+      - hotel-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hotel-network
+
+  adminer:
+    image: adminer:4
+    container_name: hotel-adminer
+    profiles: ['tools']
+    ports:
+      - '${HOTEL_ADMINER_PORT:-4280}:8080'
+    environment:
+      ADMINER_DEFAULT_SERVER: hotel-postgres
+    networks:
+      - hotel-network
+
+volumes:
+  hotel-postgres-data:
+    name: hotel-postgres-data
+  hotel-hub-postgres-data:
+    name: hotel-hub-postgres-data
+  hotel-redis-data:
+    name: hotel-redis-data
+
+networks:
+  hotel-network:
+    name: hotel-network
