@@ -1,85 +1,88 @@
-# Lokalna razvojna infrastruktura hotelskog sistema.
-# Projekt, kontejneri, volume-i i mreža imaju prefiks hotel- da se ne sudaraju sa POS-om (ugpos-*).
-name: hotel
+# Razvojna infrastruktura hotelskog sistema; radi na NAS-u (192.168.1.199).
+# Projekt claude-hotel i imena hotel-*-claude prate konvenciju NAS-a i ne sudaraju se sa POS-om
+# (claude-pos, pos-*-claude, ugpos-*). Ime hotelski_system je zauzeto: to je zajednički Verdaccio.
+# Portovi su vezani samo na 127.0.0.1; sa računara se dolazi SSH tunelom.
+# Nijedan servis ne sme sam da se ugasi (Container Manager šalje mejl za svaki stop).
+name: claude-hotel
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: hotel-postgres
+    container_name: hotel-postgres-claude
     restart: unless-stopped
     ports:
-      - '${HOTEL_POSTGRES_PORT:-5442}:5432'
+      - '127.0.0.1:${HOTEL_POSTGRES_PORT:-5442}:5432'
     environment:
       POSTGRES_DB: ${HOTEL_POSTGRES_DB:-hotel}
       POSTGRES_USER: ${HOTEL_POSTGRES_USER:-hotel}
       POSTGRES_PASSWORD: ${HOTEL_POSTGRES_PASSWORD:-hotel_dev}
     volumes:
-      - hotel-postgres-data:/var/lib/postgresql/data
+      - hotel-postgres-data-claude:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${HOTEL_POSTGRES_USER:-hotel} -d ${HOTEL_POSTGRES_DB:-hotel}']
       interval: 5s
       timeout: 5s
       retries: 10
     networks:
-      - hotel-network
+      - hotel-network-claude
 
   # Hub ima sopstvenu bazu i nikad ne čita bazu instalacije (spec §3).
   hub-postgres:
     image: postgres:16-alpine
-    container_name: hotel-hub-postgres
+    container_name: hotel-hub-postgres-claude
     restart: unless-stopped
     ports:
-      - '${HOTEL_HUB_POSTGRES_PORT:-5443}:5432'
+      - '127.0.0.1:${HOTEL_HUB_POSTGRES_PORT:-5443}:5432'
     environment:
       POSTGRES_DB: ${HOTEL_HUB_POSTGRES_DB:-hotel_hub}
       POSTGRES_USER: ${HOTEL_HUB_POSTGRES_USER:-hotel_hub}
       POSTGRES_PASSWORD: ${HOTEL_HUB_POSTGRES_PASSWORD:-hotel_hub_dev}
     volumes:
-      - hotel-hub-postgres-data:/var/lib/postgresql/data
+      - hotel-hub-postgres-data-claude:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${HOTEL_HUB_POSTGRES_USER:-hotel_hub} -d ${HOTEL_HUB_POSTGRES_DB:-hotel_hub}']
       interval: 5s
       timeout: 5s
       retries: 10
     networks:
-      - hotel-network
+      - hotel-network-claude
 
   redis:
     image: redis:7-alpine
-    container_name: hotel-redis
+    container_name: hotel-redis-claude
     restart: unless-stopped
     ports:
-      - '${HOTEL_REDIS_PORT:-6390}:6379'
+      - '127.0.0.1:${HOTEL_REDIS_PORT:-6390}:6379'
     command: redis-server --appendonly yes
     volumes:
-      - hotel-redis-data:/data
+      - hotel-redis-data-claude:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 5s
       retries: 10
     networks:
-      - hotel-network
+      - hotel-network-claude
 
   adminer:
     image: adminer:4
-    container_name: hotel-adminer
+    container_name: hotel-adminer-claude
     profiles: ['tools']
     ports:
-      - '${HOTEL_ADMINER_PORT:-4280}:8080'
+      - '127.0.0.1:${HOTEL_ADMINER_PORT:-4280}:8080'
     environment:
-      ADMINER_DEFAULT_SERVER: hotel-postgres
+      ADMINER_DEFAULT_SERVER: hotel-postgres-claude
     networks:
-      - hotel-network
+      - hotel-network-claude
 
 volumes:
-  hotel-postgres-data:
-    name: hotel-postgres-data
-  hotel-hub-postgres-data:
-    name: hotel-hub-postgres-data
-  hotel-redis-data:
-    name: hotel-redis-data
+  hotel-postgres-data-claude:
+    name: hotel-postgres-data-claude
+  hotel-hub-postgres-data-claude:
+    name: hotel-hub-postgres-data-claude
+  hotel-redis-data-claude:
+    name: hotel-redis-data-claude
 
 networks:
-  hotel-network:
-    name: hotel-network
+  hotel-network-claude:
+    name: hotel-network-claude
