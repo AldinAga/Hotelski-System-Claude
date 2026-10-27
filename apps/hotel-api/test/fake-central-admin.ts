@@ -61,6 +61,14 @@ export interface FakeCentralAdmin {
   setRedirect(location: string | null): void;
   /** Delays every answer by this many milliseconds (0 = none), to hold calls in flight. */
   setLatency(ms: number): void;
+  /**
+   * Publishes a new key set, issued now and signed by the newest open key,
+   * that retires that key and adds a fresh one; then re-signs every licence
+   * with the fresh key (revision bumped). Returns the fresh key id.
+   */
+  rotateKeys(): string;
+  /** The serverTime heartbeats report; null (default) is the real clock. */
+  setServerTime(at: Date | null): void;
   requests: RecordedRequest[];
   close(): Promise<void>;
 }
@@ -71,7 +79,7 @@ interface Installation {
   id: string;
   publicKey: string;
   revision: number;
-  signer: KeySetChoice;
+  signer: Signer;
   overrides: Partial<LicensePayload>;
   envelope: LicenseEnvelope;
 }
@@ -137,6 +145,10 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
     signers.rotated,
   );
   const published = [rootKeySet, rotatedKeySet, rotatedTwiceKeySet];
+  // The open key of the newest published set, which signs the next rotation.
+  let newestSigner: Signer = signers['rotated-twice'];
+  let rotations = 0;
+  let serverTime: Date | null = null;
   const keySetFor: Record<KeySetChoice, SignedKeySet> = {
     root: rootKeySet,
     rotated: rotatedKeySet,
@@ -173,7 +185,7 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
       ...globalPatch,
     };
     payload.revision = inst.revision;
-    return signLicense(payload, signers[inst.signer]);
+    return signLicense(payload, inst.signer);
   }
 
   function send(res: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}): void {
@@ -235,11 +247,17 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
       if (!entry) return refuse(res, 404, 'activation_code_unknown', 'Aktivacioni kod nije pronađen.');
       if (entry.used) return refuse(res, 409, 'activation_code_used', 'Aktivacioni kod je već iskorišćen.');
       entry.used = true;
-      const signer = entry.opts.keySet ?? 'rotated';
-      const base = { id: randomUUID(), publicKey: publicKey as string, revision: 1, signer, overrides: entry.opts.licence ?? {} };
+      const choice = entry.opts.keySet ?? 'rotated';
+      const base = {
+        id: randomUUID(),
+        publicKey: publicKey as string,
+        revision: 1,
+        signer: signers[choice],
+        overrides: entry.opts.licence ?? {},
+      };
       const inst: Installation = { ...base, envelope: issue(base) };
       installations.set(inst.id, inst);
-      return send(res, 200, { installationId: inst.id, license: inst.envelope, keySet: keySetFor[signer] });
+      return send(res, 200, { installationId: inst.id, license: inst.envelope, keySet: keySetFor[choice] });
     }
 
     if (rec.method === 'GET' && url.pathname === '/v1/keys') {
@@ -264,7 +282,7 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
         if (!body || Object.keys(body).join(',') !== 'version' || typeof body.version !== 'string') {
           return refuse(res, 422, 'validation_failed', 'Telo mora biti tačno {version}.');
         }
-        return send(res, 200, { serverTime: new Date().toISOString(), latestRevision: inst.revision });
+        return send(res, 200, { serverTime: (serverTime ?? new Date()).toISOString(), latestRevision: inst.revision });
       }
     }
 
@@ -322,6 +340,35 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
     },
     setLatency(ms: number): void {
       latencyMs = ms;
+    },
+    rotateKeys(): string {
+      rotations += 1;
+      const keyId = `k${3 + rotations}`;
+      const pair = generateSigningKeyPair();
+      const at = new Date().toISOString();
+      const previous = published[published.length - 1].payload.keys;
+      const set = signKeySet(
+        {
+          type: 'keyset',
+          issued_at: at,
+          keys: [
+            ...previous.map((k) => (k.active_until === null ? { ...k, active_until: at } : k)),
+            keyEntry(keyId, pair.publicKey, at, null),
+          ],
+        },
+        newestSigner,
+      );
+      published.push(set);
+      newestSigner = { keyId, privateKeyPem: pair.privateKeyPem };
+      for (const inst of installations.values()) {
+        inst.signer = newestSigner;
+        inst.revision += 1;
+        inst.envelope = issue(inst);
+      }
+      return keyId;
+    },
+    setServerTime(at: Date | null): void {
+      serverTime = at;
     },
     requests,
     close(): Promise<void> {
