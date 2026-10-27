@@ -39,7 +39,7 @@ describe('/aktivacija', () => {
     expect(screen.getByLabelText('Aktivacioni kod')).toBeInTheDocument();
   });
 
-  it('walks activation, owner and the first TOTP code; the QR comes from totpUri', async () => {
+  it('walks activation, owner and the first TOTP code (typed as the app shows it, "123 456"); the QR comes from totpUri', async () => {
     const totpUri = 'otpauth://totp/Hotel:vlasnik%40hotel.rs?secret=JBSWY3DPEHPK3PXP&issuer=Hotel';
     const calls = mockFetch({
       'GET /api/setup/status': OPEN,
@@ -64,7 +64,7 @@ describe('/aktivacija', () => {
 
     expect(await screen.findByRole('img', { name: 'QR kod za aplikaciju za autentifikaciju' })).toBeInTheDocument();
     expect(screen.getByText('JBSWY3DPEHPK3PXP')).toBeInTheDocument();
-    await user.type(screen.getByLabelText('Kod iz aplikacije'), '123456');
+    await user.type(screen.getByLabelText('Kod iz aplikacije'), '123 456');
     await user.click(screen.getByRole('button', { name: 'Potvrdi' }));
 
     expect(await screen.findByText(/Podešavanje je završeno/)).toBeInTheDocument();

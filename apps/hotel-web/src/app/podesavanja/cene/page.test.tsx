@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { navigation } from '@/lib/api';
-import { apiError, mockFetch, type Call } from '@/test/fetch-mock';
+import { apiError, mockFetch, type Call, type Reply } from '@/test/fetch-mock';
 import RatesPage from './page';
 
 const TYPE = { id: '11111111-1111-4111-8111-111111111111', code: 'DBL', name: { sr: 'Dvokrevetna' }, capacity: 2, beds: null, description: null, active: true };
@@ -96,6 +96,68 @@ describe('/podesavanja/cene', () => {
     expect(options).toEqual(['Tip: DBL – Dvokrevetna', 'Jedinica bez tipa: Apartman 2']);
     expect(screen.queryByRole('button', { name: /obriši|ukloni cenu/i })).toBeNull();
     expect(screen.getByText(/Uneta cena se ne može obrisati/)).toBeInTheDocument();
+  });
+
+  describe('out-of-order grid answers', () => {
+    const DAYS = `GET /api/rate-plans/${PLAN.id}/days`;
+    const isType = (c: Call) => c.url.includes(`scope=unit_type%3A${TYPE.id}`);
+    const looseDays = { body: [{ day: '2026-11-02', priceMinor: 200_000, closed: false }] };
+
+    function deferred() {
+      let resolve!: (r: Reply) => void;
+      const promise = new Promise<Reply>((r) => (resolve = r));
+      return { promise, resolve };
+    }
+
+    for (const [label, late] of [
+      ['prices', { body: [{ day: '2026-11-02', priceMinor: 1_000_000, closed: false }] }],
+      ['an error', apiError(500, 'boom', 'Kasna greška.')],
+    ] as Array<[string, Reply]>) {
+      it(`a late answer with ${label} for a scope already left neither paints nor reports`, async () => {
+        const slow = deferred();
+        mockFetch(routes({ [DAYS]: (c: Call) => (isType(c) ? slow.promise : looseDays) }));
+        const user = userEvent.setup();
+        render(<RatesPage />);
+
+        const scope = await screen.findByLabelText('Za koga važi cena');
+        await user.selectOptions(scope, `unit:${LOOSE_UNIT.id}`);
+        expect(await screen.findByRole('button', { name: /^2026-11-02, 2\.000,00 RSD/ })).toBeInTheDocument();
+
+        slow.resolve(late);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(screen.getByRole('button', { name: /^2026-11-02/ })).toHaveAccessibleName(/^2026-11-02, 2\.000,00 RSD/);
+        expect(screen.queryByRole('alert')).toBeNull();
+      });
+    }
+
+    it('while another scope loads, the previous scope\'s prices are not shown', async () => {
+      const slow = deferred();
+      mockFetch(
+        routes({
+          [DAYS]: (c: Call) =>
+            isType(c) ? { body: [{ day: '2026-11-02', priceMinor: 1_000_000, closed: false }] } : slow.promise,
+        }),
+      );
+      const user = userEvent.setup();
+      render(<RatesPage />);
+      await screen.findByRole('button', { name: /^2026-11-02, 10\.000,00 RSD/ });
+
+      await user.selectOptions(screen.getByLabelText('Za koga važi cena'), `unit:${LOOSE_UNIT.id}`);
+      expect(screen.getByRole('button', { name: /^2026-11-02/ })).toHaveAccessibleName('2026-11-02, bez cene');
+      slow.resolve(looseDays);
+      expect(await screen.findByRole('button', { name: /^2026-11-02, 2\.000,00 RSD/ })).toBeInTheDocument();
+    });
+
+    it('a load error goes away after a later successful load', async () => {
+      mockFetch(routes({ [DAYS]: (c: Call) => (isType(c) ? apiError(500, 'boom', 'Greška pri čitanju.') : looseDays) }));
+      const user = userEvent.setup();
+      render(<RatesPage />);
+      expect(await screen.findByRole('alert')).toHaveTextContent('Greška pri čitanju.');
+
+      await user.selectOptions(screen.getByLabelText('Za koga važi cena'), `unit:${LOOSE_UNIT.id}`);
+      expect(await screen.findByRole('button', { name: /^2026-11-02, 2\.000,00 RSD/ })).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
   });
 
   it('shows the safe-mode refusal from the dictionary', async () => {

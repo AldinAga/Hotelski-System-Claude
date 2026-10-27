@@ -12,7 +12,8 @@ export interface Reply {
   body?: unknown;
 }
 
-type Route = Reply | ((call: Call) => Reply);
+/** A function route may answer later (a Promise), to stage out-of-order responses. */
+type Route = Reply | ((call: Call) => Reply | Promise<Reply>);
 
 /**
  * Replaces global fetch. Routes are keyed "METHOD /api/path" (query ignored);
@@ -31,7 +32,7 @@ export function mockFetch(routes: Record<string, Route>): Call[] {
     const reply: Reply = route === undefined
       ? { status: 599, body: { code: 'unmocked', message: `unmocked ${method} ${url}`, details: null } }
       : typeof route === 'function'
-        ? route(call)
+        ? await route(call)
         : route;
     const status = reply.status ?? 200;
     const text = reply.body === undefined ? null : JSON.stringify(reply.body);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, send } from '@/lib/api';
 import { addDays, formatDay, formatRsd, isDay, nightsBetween, parseRsd, today } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
@@ -60,7 +60,9 @@ export default function RatesPage() {
   const [planId, setPlanId] = useState('');
   const [scopeValue, setScopeValue] = useState('');
   const [start, setStart] = useState(today());
-  const [days, setDays] = useState<Record<string, RateDay>>({});
+  const [loaded, setLoaded] = useState<{ key: string; days: Record<string, RateDay> }>({ key: '', days: {} });
+  const [daysError, setDaysError] = useState<string | null>(null);
+  const daysSeq = useRef(0);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [price, setPrice] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -87,24 +89,35 @@ export default function RatesPage() {
   const scope = scopes.find((o) => o.value === scopeValue)?.scope;
   const gridDays = isDay(start) ? Array.from({ length: GRID_DAYS }, (_, i) => addDays(start, i)) : [];
 
+  /** What the grid shows; prices of another plan, scope or start are never painted. */
+  const gridKey = `${planId}|${scopeValue}|${start}`;
+  const days = loaded.key === gridKey ? loaded.days : {};
+
+  /**
+   * Reads the grid. Only the latest request may paint or report: a slower
+   * answer for a plan or scope the operator has already left is dropped.
+   */
   const loadDays = useCallback(async () => {
+    const seq = ++daysSeq.current;
+    const key = `${planId}|${scopeValue}|${start}`;
     if (!planId || !scopeValue || !isDay(start)) {
-      setDays({});
+      setLoaded({ key, days: {} });
+      setDaysError(null);
       return;
     }
     const q = `scope=${encodeURIComponent(scopeValue)}&from=${start}&to=${addDays(start, GRID_DAYS)}`;
-    const rows = await api<RateDay[]>(`/rate-plans/${planId}/days?${q}`);
-    setDays(Object.fromEntries(rows.map((r) => [r.day, r])));
+    try {
+      const rows = await api<RateDay[]>(`/rate-plans/${planId}/days?${q}`);
+      if (seq !== daysSeq.current) return;
+      setLoaded({ key, days: Object.fromEntries(rows.map((r) => [r.day, r])) });
+      setDaysError(null);
+    } catch (err) {
+      if (seq === daysSeq.current) setDaysError(messageFor(err));
+    }
   }, [planId, scopeValue, start]);
 
   useEffect(() => {
-    let live = true;
-    loadDays().catch((err: unknown) => {
-      if (live) setError(messageFor(err));
-    });
-    return () => {
-      live = false;
-    };
+    void loadDays();
   }, [loadDays]);
 
   function pick(day: string) {
@@ -174,9 +187,9 @@ export default function RatesPage() {
   return (
     <main>
       <h1>Cene</h1>
-      {error && (
+      {(error ?? daysError) && (
         <p role="alert" className="error">
-          {error}
+          {error ?? daysError}
         </p>
       )}
       {notice && (

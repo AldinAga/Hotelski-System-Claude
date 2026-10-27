@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { navigation } from '@/lib/api';
@@ -105,6 +105,85 @@ describe('/podesavanja/jedinice', () => {
     const unitRow = await screen.findByRole('listitem', { name: 'Soba 101' });
     await user.click(within(unitRow).getByRole('button', { name: 'Ukloni blokadu 10.11.2026 – 11.11.2026' }));
     await vi.waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
+  });
+
+  it('a block beyond the first 62 days becomes visible after moving "Blokade od"', async () => {
+    const FAR = '66666666-6666-4666-8666-666666666666';
+    const calls = mockFetch(
+      routes({
+        'GET /api/calendar': (c: Call) => ({
+          body: c.url.includes('from=2027-03-01')
+            ? {
+                ...CALENDAR,
+                units: [
+                  { ...CALENDAR.units[0], bars: [{ kind: 'block', blockId: FAR, from: '2027-03-10', to: '2027-03-12', reason: 'maintenance' }] },
+                ],
+              }
+            : CALENDAR,
+        }),
+        [`DELETE /api/units/${UNIT.id}/blocks/${FAR}`]: { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<UnitsPage />);
+    await screen.findByRole('listitem', { name: 'Soba 101' });
+    expect(screen.queryByText(/10\.3\.2027/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Blokade od'), { target: { value: '2027-03-01' } });
+
+    const unitRow = await screen.findByRole('listitem', { name: 'Soba 101' });
+    expect(await within(unitRow).findByText('10.3.2027 – 11.3.2027 · Održavanje')).toBeInTheDocument();
+    expect(calls.map((c) => c.url)).toContain('/api/calendar?from=2027-03-01&to=2027-05-02');
+    await user.click(within(unitRow).getByRole('button', { name: 'Ukloni blokadu 10.3.2027 – 11.3.2027' }));
+    await vi.waitFor(() =>
+      expect(calls.some((c) => c.method === 'DELETE' && c.url === `/api/units/${UNIT.id}/blocks/${FAR}`)).toBe(true),
+    );
+  });
+
+  it('unit_has_blocks offers removing the named block, even one outside the window, and sends the DELETE', async () => {
+    const FAR = '77777777-7777-4777-8777-777777777777';
+    const calls = mockFetch(
+      routes({
+        [`PATCH /api/units/${UNIT.id}`]: apiError(409, 'unit_has_blocks', 'server text', { blockId: FAR }),
+        [`DELETE /api/units/${UNIT.id}/blocks/${FAR}`]: { status: 204 },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<UnitsPage />);
+    const unitRow = await screen.findByRole('listitem', { name: 'Soba 101' });
+    await user.click(within(unitRow).getByRole('button', { name: 'Isključi' }));
+
+    const alert = await screen.findByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Ukloni tu blokadu' }));
+
+    await vi.waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([`/api/units/${UNIT.id}/blocks/${FAR}`]);
+    expect(await screen.findByRole('status')).toHaveTextContent('Blokada je uklonjena.');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a refused unit create keeps the typed name; a successful one clears it', async () => {
+    let refuse = true;
+    mockFetch(
+      routes({
+        'POST /api/units': (c: Call) =>
+          refuse
+            ? apiError(409, 'unit_name_taken')
+            : { status: 201, body: { ...UNIT, id: 'n', ...(c.body as object) } },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<UnitsPage />);
+    const form = await screen.findByRole('form', { name: 'Nova jedinica' });
+    await user.type(within(form).getByLabelText('Naziv'), 'Soba 101');
+    await user.click(within(form).getByRole('button', { name: 'Dodaj jedinicu' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Jedinica sa ovim nazivom već postoji.');
+    expect(within(form).getByLabelText('Naziv')).toHaveValue('Soba 101');
+
+    refuse = false;
+    await user.click(within(form).getByRole('button', { name: 'Dodaj jedinicu' }));
+    await vi.waitFor(() => expect(within(form).getByLabelText('Naziv')).toHaveValue(''));
   });
 
   it('creates a unit type', async () => {

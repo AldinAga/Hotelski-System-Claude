@@ -141,7 +141,7 @@ export default function ActivationPage() {
   function onConfirm(e: FormEvent) {
     e.preventDefault();
     void run(async () => {
-      await api('/setup/confirm', send('POST', { setupToken: setupToken.trim(), totp: totp.trim() }));
+      await api('/setup/confirm', send('POST', { setupToken: setupToken.trim(), totp: totp.replace(/\s/g, '') }));
       setPassword('');
       setPassword2('');
       setStep('finished');

@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { api, send } from '@/lib/api';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, ApiError, send } from '@/lib/api';
 import { addDays, formatDay, isDay, today } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
 import {
@@ -49,26 +49,38 @@ export default function UnitsPage() {
   const [editingType, setEditingType] = useState<UnitType | null>(null);
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
   const [blockFormFor, setBlockFormFor] = useState<string | null>(null);
+  /** First day of the block window; moving it shows blocks further ahead. */
+  const [blocksStart, setBlocksStart] = useState(today());
+  /** The block named by a 409 unit_has_blocks, which may lie outside the window. */
+  const [stuckBlock, setStuckBlock] = useState<{ unitId: string; blockId: string } | null>(null);
+  const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
-    const from = today();
+    const seq = ++loadSeq.current;
+    const from = isDay(blocksStart) ? blocksStart : today();
     const [types, units, calendar] = await Promise.all([
       api<UnitType[]>('/unit-types'),
       api<Unit[]>('/units'),
       api<CalendarView>(`/calendar?from=${from}&to=${addDays(from, BLOCK_WINDOW_DAYS)}`),
     ]);
-    setData({ types, units, blocks: blocksFrom(calendar) });
-  }, []);
+    // Only the latest load paints: an older window must not overwrite a newer one.
+    if (seq === loadSeq.current) setData({ types, units, blocks: blocksFrom(calendar) });
+  }, [blocksStart]);
 
   useEffect(() => {
     load().catch((err: unknown) => setError(messageFor(err)));
   }, [load]);
 
-  /** Runs a change, then reloads; errors land in the one alert at the top. */
-  async function change(action: () => Promise<unknown>, done: string): Promise<boolean> {
+  /**
+   * Runs a change, then reloads; errors land in the one alert at the top.
+   * For a change to unit `unitId`, a 409 unit_has_blocks also offers removing
+   * the block it names, since that block may be outside the shown window.
+   */
+  async function change(action: () => Promise<unknown>, done: string, unitId?: string): Promise<boolean> {
     setBusy(true);
     setError(null);
     setNotice(null);
+    setStuckBlock(null);
     try {
       await action();
       setNotice(done);
@@ -76,6 +88,8 @@ export default function UnitsPage() {
       return true;
     } catch (err) {
       setError(messageFor(err));
+      const blockId = err instanceof ApiError && err.code === 'unit_has_blocks' ? err.details?.blockId : undefined;
+      if (unitId && typeof blockId === 'string') setStuckBlock({ unitId, blockId });
       return false;
     } finally {
       setBusy(false);
@@ -88,9 +102,22 @@ export default function UnitsPage() {
     <main>
       <h1>Jedinice</h1>
       {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
+        <div role="alert" className="error stack">
+          <span>{error}</span>
+          {stuckBlock && (
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                const { unitId, blockId } = stuckBlock;
+                void change(() => api(`/units/${unitId}/blocks/${blockId}`, send('DELETE')), 'Blokada je uklonjena.');
+              }}
+            >
+              Ukloni tu blokadu
+            </button>
+          )}
+        </div>
       )}
       {notice && (
         <p role="status" className="notice">
@@ -161,8 +188,14 @@ export default function UnitsPage() {
           <p className="help">
             Isključena jedinica se ne prodaje. Jedinica sa blokadom ili dodeljenim boravkom koji još traje ne može da
             promeni tip niti da se isključi dok se blokada ne ukloni ili boravak ne premesti. Prikazane su blokade u
-            narednih {BLOCK_WINDOW_DAYS} dana.
+            {` ${BLOCK_WINDOW_DAYS} dana od izabranog datuma; za kasnije blokade pomerite datum.`}
           </p>
+          <div className="row">
+            <label>
+              Blokade od
+              <input type="date" value={blocksStart} onChange={(e) => setBlocksStart(e.target.value)} />
+            </label>
+          </div>
           <ul className="list">
             {data.units.map((u) => {
               const type = u.unitTypeId ? typeById.get(u.unitTypeId) : undefined;
@@ -217,6 +250,7 @@ export default function UnitsPage() {
                         change(
                           () => api(`/units/${u.id}`, send('PATCH', { active: !u.active })),
                           u.active ? 'Jedinica je isključena.' : 'Jedinica je uključena.',
+                          u.id,
                         )
                       }
                     >
@@ -256,8 +290,10 @@ export default function UnitsPage() {
                     ? api(`/units/${editingUnit.id}`, send('PATCH', body))
                     : api('/units', send('POST', body)),
                 editingUnit ? 'Jedinica je sačuvana.' : 'Jedinica je dodata.',
+                editingUnit?.id,
               );
               if (ok) setEditingUnit(null);
+              return ok;
             }}
           />
         </>
@@ -347,7 +383,7 @@ function UnitForm(props: {
   types: UnitType[];
   busy: boolean;
   onCancel: () => void;
-  onSubmit: (body: Record<string, unknown>) => Promise<void>;
+  onSubmit: (body: Record<string, unknown>) => Promise<boolean>;
 }) {
   const { editing } = props;
   const [name, setName] = useState(editing?.name ?? '');
@@ -364,8 +400,8 @@ function UnitForm(props: {
       props.onCancel();
       return;
     }
-    await props.onSubmit(body);
-    if (!editing) {
+    // A refused create (e.g. unit_name_taken) keeps what was typed.
+    if ((await props.onSubmit(body)) && !editing) {
       setName('');
       setTypeId('');
     }
