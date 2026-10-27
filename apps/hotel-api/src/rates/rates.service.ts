@@ -78,15 +78,15 @@ function policyOf(b: Body): Record<string, unknown> | null | undefined {
   return v as Record<string, unknown>;
 }
 
-/** { from, to } as ISO dates, to exclusive, at most MAX_RANGE_DAYS long. */
-function rangeOf(from: unknown, to: unknown): { from: string; to: string } {
+/** { from, to } as ISO dates, to exclusive, at most `max` (default MAX_RANGE_DAYS) days long. */
+export function rangeOf(from: unknown, to: unknown, max = MAX_RANGE_DAYS): { from: string; to: string } {
   const f = requireDate({ from }, 'from');
   const t = requireDate({ to }, 'to');
   if (t <= f) throw validationFailed('to', 'Datum "to" mora biti posle datuma "from".');
   const days = (Date.parse(`${t}T00:00:00Z`) - Date.parse(`${f}T00:00:00Z`)) / DAY_MS;
-  if (days > MAX_RANGE_DAYS) {
-    throw new DomainError('range_too_long', `Opseg može imati najviše ${MAX_RANGE_DAYS} dana.`, 422, {
-      max: MAX_RANGE_DAYS,
+  if (days > max) {
+    throw new DomainError('range_too_long', `Opseg može imati najviše ${max} dana.`, 422, {
+      max,
       days,
     });
   }
