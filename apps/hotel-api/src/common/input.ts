@@ -1,3 +1,4 @@
+import type { LocalizedText } from '../db/schema';
 import { DomainError } from './domain-error';
 
 // Hand-rolled request body checks (the API has no validation library yet).
@@ -89,4 +90,25 @@ export function isUniqueViolation(err: unknown): boolean {
 /** Postgres exclusion constraint violation, raw or wrapped by Drizzle. */
 export function isExclusionViolation(err: unknown): boolean {
   return hasPgCode(err, '23P01');
+}
+
+/** {sr, en?}: sr a non-empty string, en optional. */
+export function localized(value: unknown, field: string, required: true): LocalizedText;
+export function localized(value: unknown, field: string, required: false): Partial<LocalizedText> | null;
+export function localized(value: unknown, field: string, required: boolean): Partial<LocalizedText> | null {
+  if (!required && value === null) return null;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw validationFailed(field);
+  const v = value as Record<string, unknown>;
+  const out: Partial<LocalizedText> = {};
+  if (Object.keys(v).some((k) => k !== 'sr' && k !== 'en')) throw validationFailed(field);
+  for (const lang of ['sr', 'en'] as const) {
+    const raw = v[lang];
+    if (raw === undefined || raw === null) continue;
+    if (typeof raw !== 'string') throw validationFailed(field);
+    const text = raw.trim();
+    if (text.length > 2000) throw validationFailed(field);
+    if (text) out[lang] = text;
+  }
+  if (required && !out.sr) throw validationFailed(field);
+  return out;
 }

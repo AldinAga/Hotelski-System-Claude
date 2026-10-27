@@ -14,6 +14,7 @@
     "@nestjs/core": "^10.4.0",
     "@nestjs/platform-express": "^10.4.0",
     "@platform/licensing": "0.3.0",
+    "@platform/money": "0.2.1",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.12.0",
     "reflect-metadata": "^0.2.2",

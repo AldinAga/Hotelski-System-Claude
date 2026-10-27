@@ -144,3 +144,22 @@ export type BlockReason = (typeof BLOCK_REASONS)[number];
 
 // unit_block.period (daterange) and inventory_day are read and written with
 // raw SQL in src/inventory, so they have no Drizzle table here.
+
+// See migrations/0006_rates.sql. rate_day is read and written with raw SQL in
+// src/rates (one statement per range), so it has no Drizzle table here.
+export const BOARDS = ['RO', 'BB', 'HB', 'FB'] as const;
+export type Board = (typeof BOARDS)[number];
+
+export const ratePlan = pgTable('rate_plan', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  propertyId: uuid('property_id')
+    .notNull()
+    .references(() => property.id),
+  code: text('code').notNull(),
+  name: jsonb('name').$type<LocalizedText>().notNull(),
+  board: text('board', { enum: BOARDS }).notNull().default('RO'),
+  cancellationPolicy: jsonb('cancellation_policy').$type<Record<string, unknown>>(),
+  discount7Pct: integer('discount_7_pct').notNull().default(0),
+  discount30Pct: integer('discount_30_pct').notNull().default(0),
+  active: boolean('active').notNull().default(true),
+});

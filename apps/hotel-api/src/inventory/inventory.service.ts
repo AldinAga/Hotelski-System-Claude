@@ -179,7 +179,7 @@ export class InventoryService {
          AND day >= ${today}::date`);
   }
 
-  private async assertScopeExists(tx: Tx, propertyId: string, scope: Scope): Promise<void> {
+  async assertScopeExists(tx: Tx, propertyId: string, scope: Scope): Promise<void> {
     const { rows } = await tx.execute(
       scope.kind === 'unit_type'
         ? sql`SELECT 1 FROM unit_type WHERE id = ${scope.id} AND property_id = ${propertyId}`
