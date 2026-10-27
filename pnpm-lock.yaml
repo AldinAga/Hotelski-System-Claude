@@ -23,6 +23,9 @@ importers:
       '@nestjs/platform-express':
         specifier: ^10.4.0
         version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.22)
+      '@platform/licensing':
+        specifier: 0.3.0
+        version: 0.3.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
@@ -459,6 +462,10 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
+
+  '@platform/licensing@0.3.0':
+    resolution: {integrity: sha512-fKWh523RNzYtqislw9yPtOFNwtrUHtqmSTeKp9HW+Mg2L62aeFVsVsL6Ns7I2I5WGSd3mpqVt1YmuQ/bOfzgNQ==}
+    engines: {node: '>=20'}
 
   '@sinclair/typebox@0.27.12':
     resolution: {integrity: sha512-hhyNJ+nbR6ZR7pToHvllEFun9TL0sbL+tk/ON75lo+Xas054uez98qRbsuNt7MBCyZKK4+8Yli/OAGZhmfBZ/g==}
@@ -3247,6 +3254,8 @@ snapshots:
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
+
+  '@platform/licensing@0.3.0': {}
 
   '@sinclair/typebox@0.27.12': {}
 

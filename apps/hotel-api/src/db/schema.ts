@@ -31,6 +31,17 @@ export const legalProfile = pgTable('legal_profile', {
   vatPayer: boolean('vat_payer').notNull().default(false),
 });
 
+// One row at most (the singleton key is always true).
+export const installationLicence = pgTable('installation_licence', {
+  singleton: boolean('singleton').primaryKey().default(true),
+  installationId: text('installation_id').notNull(),
+  privateSeedEnc: text('private_seed_enc').notNull(),
+  envelope: jsonb('envelope').notNull(),
+  keySet: jsonb('key_set').notNull(),
+  memory: jsonb('memory').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const auditLog = pgTable('audit_log', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   propertyId: uuid('property_id'),
