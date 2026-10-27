@@ -251,7 +251,7 @@ export class RatesService {
 
     return this.db.transaction(async (tx) => {
       await this.lockPlan(tx, propertyId, planId);
-      await this.inventory.assertScopeExists(tx, propertyId, scope);
+      await this.assertPriceable(tx, propertyId, scope);
       const res = await tx.execute(sql`
         INSERT INTO rate_day (property_id, rate_plan_id, scope_kind, scope_id, day, price_minor, closed)
         SELECT ${propertyId}::uuid, ${planId}::uuid, ${scope.kind}, ${scope.id}::uuid, d::date,
@@ -282,7 +282,7 @@ export class RatesService {
 
     return this.db.transaction(async (tx) => {
       await this.assertPlanExists(tx, propertyId, planId);
-      await this.inventory.assertScopeExists(tx, propertyId, scope);
+      await this.assertPriceable(tx, propertyId, scope);
       const { rows } = await tx.execute<{ day: string; price_minor: string | null; closed: boolean }>(sql`
         SELECT day::text AS day, price_minor::text AS price_minor, closed
           FROM rate_day
@@ -333,6 +333,24 @@ export class RatesService {
       closed: r.closed ?? false,
     }));
     return quoteStay({ nights, discount7Pct: plan.discount7Pct, discount30Pct: plan.discount30Pct, currency: CURRENCY });
+  }
+
+  /**
+   * The scope exists and is what a quote prices: a unit that has a type is
+   * sold (and priced) through its type, so prices stored on the unit itself
+   * would never be used (422 scope_not_priced, Ruling 19).
+   */
+  private async assertPriceable(tx: Tx, propertyId: string, scope: Scope): Promise<void> {
+    await this.inventory.assertScopeExists(tx, propertyId, scope);
+    if (scope.kind !== 'unit') return;
+    const { rows } = await tx.execute<{ unit_type_id: string | null }>(
+      sql`SELECT unit_type_id FROM unit WHERE id = ${scope.id} AND property_id = ${propertyId}`,
+    );
+    if (rows[0]?.unit_type_id) {
+      throw new DomainError('scope_not_priced', 'Jedinica ima tip; cene se unose za tip jedinice.', 422, {
+        unitTypeId: rows[0].unit_type_id,
+      });
+    }
   }
 
   private async lockPlan(tx: Tx, propertyId: string, id: string): Promise<PlanRow> {

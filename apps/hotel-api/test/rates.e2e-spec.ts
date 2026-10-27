@@ -253,6 +253,27 @@ describe('base price list and stay quotes (e2e)', () => {
       expect((await get(`/rate-plans/${plan}/days?scope=nonsense&from=2026-12-01&to=2026-12-02`)).status).toBe(422);
     });
 
+    it('a unit that has a type is never priced on its own: 422 scope_not_priced on PUT and GET (Ruling 19)', async () => {
+      const plan = await createPlan();
+      const typeId = await createType('DBL');
+      const typed = await post('/units', { name: 'DBL-1', unitTypeId: typeId });
+      expect(typed.status).toBe(201);
+      const scope: Scope = { kind: 'unit', id: typed.body.id };
+      const res = await put(`/rate-plans/${plan}/days`, { scope, from: '2026-12-01', to: '2026-12-02', priceMinor: 1 });
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ code: 'scope_not_priced', details: { unitTypeId: typeId } });
+      expect((await ta.testDb.pool.query('SELECT count(*)::int AS n FROM rate_day')).rows[0].n).toBe(0);
+      const read = await get(`/rate-plans/${plan}/days?scope=${scopeParam(scope)}&from=2026-12-01&to=2026-12-02`);
+      expect(read.status).toBe(422);
+      expect(read.body.code).toBe('scope_not_priced');
+
+      // A unit without a type is its own scope and is priced.
+      const loose = await post('/units', { name: 'Apartman', unitTypeId: null });
+      const looseScope: Scope = { kind: 'unit', id: loose.body.id };
+      expect((await put(`/rate-plans/${plan}/days`, { scope: looseScope, from: '2026-12-01', to: '2026-12-02', priceMinor: 1 })).status).toBe(200);
+      expect((await get(`/rate-plans/${plan}/days?scope=${scopeParam(looseScope)}&from=2026-12-01&to=2026-12-02`)).status).toBe(200);
+    });
+
     it('days of an unknown plan: 404 rate_plan_not_found', async () => {
       const scope: Scope = { kind: 'unit_type', id: await createType('DBL') };
       const id = '00000000-0000-4000-8000-000000000000';
@@ -352,6 +373,9 @@ describe('base price list and stay quotes (e2e)', () => {
       expect(blocked.status).toBe(403);
       expect(blocked.body.code).toBe('safe_mode_blocked');
       expect((await post('/rate-plans', { code: 'Y', name: { sr: 'y' } })).body.code).toBe('safe_mode_blocked');
+      const patched = await patch(`/rate-plans/${plan}`, { discount7Pct: 50 });
+      expect(patched.status).toBe(403);
+      expect(patched.body.code).toBe('safe_mode_blocked');
 
       const read = await get(`/rate-plans/${plan}/days?scope=${scopeParam(scope)}&from=2026-12-01&to=2026-12-02`);
       expect(read.status).toBe(200);
