@@ -1,0 +1,284 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2430;
+  --muted: #5b6676;
+  --line: #d9dee5;
+  --accent: #1f5fbf;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --danger-bg: #fdecea;
+  --warn: #8a5a00;
+  --warn-bg: #fff4dc;
+  --ok-bg: #e7f5ec;
+  --selected: #dbe8fb;
+  --closed: #eceef1;
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+main {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+main.narrow {
+  max-width: 480px;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 8px 0 16px;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 24px 0 8px;
+}
+
+a {
+  color: var(--accent);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.muted,
+.help {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+form.stack,
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.row > label {
+  flex: 1 1 140px;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+}
+
+button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+button.danger {
+  background: var(--surface);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0;
+}
+
+.notice {
+  background: var(--ok-bg);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0;
+}
+
+.banner {
+  padding: 10px 16px;
+  font-weight: 600;
+}
+
+.banner.grace {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.banner.expired {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.topnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.topnav .spacer {
+  flex: 1;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.list > li {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.list .head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--closed);
+  font-size: 0.8rem;
+}
+
+.steps {
+  display: flex;
+  gap: 8px;
+  padding: 0;
+  margin: 0 0 16px;
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.steps .current {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.qr {
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+
+code.secret {
+  word-break: break-all;
+  font-size: 1rem;
+}
+
+/* Price grid: 7 columns on a phone, more where there is room. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+@media (min-width: 720px) {
+  .grid {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+}
+
+.grid button.day {
+  min-height: 56px;
+  padding: 4px 2px;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  align-content: center;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.grid button.day .num {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.grid button.day.closed {
+  background: var(--closed);
+  color: var(--muted);
+}
+
+.grid button.day.selected {
+  background: var(--selected);
+  border-color: var(--accent);
+}
