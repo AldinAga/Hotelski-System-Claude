@@ -57,7 +57,9 @@ EXEC="$DOCKER exec -w /ci/hotel/src"
 if [ "$LOCK" = 1 ]; then
   echo "==> regenerating pnpm-lock.yaml"
   nas "$EXEC hotel-ci-runner-claude sh -c '$PNPM && pnpm install --no-frozen-lockfile'"
-  nas "cat $ROOT/src/pnpm-lock.yaml" > pnpm-lock.yaml
+  # Write to a temp file first so a failed ssh never leaves an empty lockfile.
+  nas "cat $ROOT/src/pnpm-lock.yaml" > pnpm-lock.yaml.tmp
+  mv pnpm-lock.yaml.tmp pnpm-lock.yaml
   echo "==> pnpm-lock.yaml updated"
   exit 0
 fi
