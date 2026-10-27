@@ -67,5 +67,5 @@ fi
 echo "==> installing, building, testing"
 nas "$EXEC \
   -e DATABASE_URL=postgres://postgres:postgres@hotel-postgres-test-claude:5432/postgres \
-  hotel-ci-runner-claude sh -c '$PNPM && pnpm install --frozen-lockfile && pnpm build && pnpm test && pnpm typecheck'"
+  hotel-ci-runner-claude sh -c '$PNPM && pnpm install --frozen-lockfile && pnpm build && test -f apps/hotel-api/dist/db/migrations/0001_foundation.sql && pnpm test && pnpm typecheck'"
 echo "==> green ($LABEL)"

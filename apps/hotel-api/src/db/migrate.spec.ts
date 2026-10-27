@@ -50,6 +50,24 @@ describe('migrate', () => {
     expect(rows.rows.map((r) => r.name)).toEqual(['0001_ok.sql']);
   });
 
+  it('rolls back a file whose SQL succeeds when recording it in schema_migrations fails', async () => {
+    // The file creates a table and pre-inserts its own schema_migrations row, so
+    // the migrator's own INSERT hits a duplicate key AFTER the file's SQL ran.
+    // Only the BEGIN/COMMIT wrapper can then undo the table.
+    writeFileSync(
+      join(dir, '0001_conflict.sql'),
+      `CREATE TABLE created_by_file (id int);
+       CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+       INSERT INTO schema_migrations (name) VALUES ('0001_conflict.sql');`,
+    );
+
+    await expect(migrate(pool, dir)).rejects.toThrow(/duplicate key/);
+
+    expect(await tableExists('created_by_file')).toBe(false);
+    const rows = await pool.query('SELECT name FROM schema_migrations');
+    expect(rows.rowCount).toBe(0);
+  });
+
   it('applies a file exactly once when two migrators run in parallel', async () => {
     // A plain CREATE TABLE fails on the second application, so a missing lock
     // makes one of the calls reject.
