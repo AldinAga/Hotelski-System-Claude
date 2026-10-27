@@ -294,6 +294,7 @@ export class UnitsService {
         if (typeChanged && nextTypeId) await this.assertUsableType(tx, propertyId, nextTypeId);
         if (nextActive && !before.active) await this.assertRoomForOneMore(tx, propertyId);
         if (typeChanged || activeChanged) await this.assertNoOpenBlocks(tx, propertyId, id);
+        if (typeChanged) await this.assertNoOpenStays(tx, propertyId, id);
 
         const [row] = await tx
           .update(unit)
@@ -347,6 +348,26 @@ export class UnitsService {
       .from(unit)
       .where(and(eq(unit.propertyId, propertyId), eq(unit.active, true)));
     this.licence.assertLimit('rooms', n + 1);
+  }
+
+  /**
+   * A stay on the unit has its nights sold in the unit's current scope and
+   * must stay on a unit of its own type (Ruling 15), so the unit cannot
+   * change type while a stay assigned to it has not ended. Call with the unit
+   * row locked: book and assignUnit lock the same row.
+   */
+  private async assertNoOpenStays(tx: Tx, propertyId: string, unitId: string): Promise<void> {
+    const today = await this.inventory.today(tx, propertyId);
+    const { rows } = await tx.execute<{ id: string }>(sql`
+      SELECT id FROM stay
+       WHERE property_id = ${propertyId} AND unit_id = ${unitId}
+         AND status IN ('expected', 'in_house') AND departure > ${today}::date
+       ORDER BY arrival LIMIT 1`);
+    if (rows[0]) {
+      throw new DomainError('unit_has_stays', 'Jedinica ima dodeljen boravak koji još traje; prvo ga premestite.', 409, {
+        stayId: rows[0].id,
+      });
+    }
   }
 
   /**

@@ -85,6 +85,16 @@ export class UnitBlocksService {
         if (from < (await this.inventory.today(tx, propertyId))) {
           throw validationFailed('from', 'Blokada ne može da počne pre današnjeg dana.');
         }
+        // A live stay on the unit in the period: book and assignUnit lock the
+        // same unit row before checking blocks, so the two cannot pass each other.
+        const { rows: stays } = await tx.execute<{ id: string }>(sql`
+          SELECT id FROM stay
+           WHERE property_id = ${propertyId} AND unit_id = ${unitId} AND status IN ('expected', 'in_house')
+             AND daterange(arrival, departure, '[)') && daterange(${from}::date, ${to}::date, '[)')
+           ORDER BY arrival LIMIT 1`);
+        if (stays[0]) {
+          throw new DomainError('unit_occupied', 'Jedinica je zauzeta boravkom u tom periodu.', 409, { stayId: stays[0].id });
+        }
         // Inserted before taking inventory: an overlap with the unit's own
         // block is block_overlap, not no_availability.
         const { rows } = await tx.execute<BlockRow>(sql`

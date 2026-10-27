@@ -163,3 +163,7 @@ export const ratePlan = pgTable('rate_plan', {
   discount30Pct: integer('discount_30_pct').notNull().default(0),
   active: boolean('active').notNull().default(true),
 });
+
+// See migrations/0007_reservations.sql. guest, reservation, reservation_counter,
+// stay and stay_night are read and written with raw SQL in src/reservations,
+// so they have no Drizzle tables here.

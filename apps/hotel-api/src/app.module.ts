@@ -8,6 +8,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { LicenceGuard } from './licensing/licence.guard';
 import { LicensingModule } from './licensing/licensing.module';
 import { RatesModule } from './rates/rates.module';
+import { ReservationsModule } from './reservations/reservations.module';
 import { UnitsModule } from './units/units.module';
 
 // The two global guards, in the order Nest runs them: who you are first
@@ -15,7 +16,7 @@ import { UnitsModule } from './units/units.module';
 // the route (@LicensedAction / @Unlicensed). Keep this order: an anonymous
 // caller must get 401, not a licence answer. test/auth.e2e-spec.ts pins it.
 @Module({
-  imports: [DatabaseModule, LicensingModule, AuthModule, InventoryModule, UnitsModule, RatesModule],
+  imports: [DatabaseModule, LicensingModule, AuthModule, InventoryModule, UnitsModule, RatesModule, ReservationsModule],
   controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
