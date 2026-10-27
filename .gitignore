@@ -1,3 +1,6 @@
 .superpowers/
 node_modules/
 .env
+dist/
+.next/
+.turbo/

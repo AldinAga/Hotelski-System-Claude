@@ -39,11 +39,11 @@ licencama i za POS i za hotel. Kvar u njemu pogađa oba proizvoda, zato:
 
 ## Docker na NAS-u
 
-1. **Samo hotelski projekat.** Hotel radi isključivo u Docker projektu `claude-hotel`
-   (`docker compose -f infrastructure/docker/docker-compose.yml`, ime je u fajlu). Kontejneri, volume-i
-   i mreže su `hotel-*-claude`.
+1. **Samo hotelski projekti.** Hotel radi isključivo u Docker projektima `claude-hotel`
+   (`docker compose -f infrastructure/docker/docker-compose.yml`, ime je u fajlu) i `claude-hotel-ci`
+   (`infrastructure/nas/ci-compose.yml`: runner i test baza). Kontejneri, volume-i i mreže su `hotel-*-claude`.
 2. **Tuđe se ne dira.** Nikad `stop`, `restart`, `rm`, `down`, `docker volume rm`, `docker network rm`
-   ni `docker system/volume/image prune` nad bilo čim što nije `hotel-*-claude` / `claude-hotel`.
+   ni `docker system/volume/image prune` nad bilo čim što nije `hotel-*-claude` / `claude-hotel` / `claude-hotel-ci`.
    Na NAS-u rade i: `claude-pos`, `claude-pos-ci`, `pos-nas-dev`, `claude-staging`, `claude-ci`,
    `claude-gh-runner`, `rustdesk-server`, `isponsorblocktv`, `portainer`.
 3. **Zamka: projekat `hotelski_system` NIJE hotel.** To je zajednički Verdaccio registar
@@ -52,6 +52,13 @@ licencama i za POS i za hotel. Kvar u njemu pogađa oba proizvoda, zato:
    i sa `--rm`. Jednokratni poslovi (testovi, migracije, build) idu kroz `docker exec` u dugotrajnom
    hotelskom kontejneru, nikad kroz `docker run`.
 5. **Testovi** koriste posebnu test bazu hotela (tmpfs), nikad razvojnu ni bazu drugog projekta.
+
+### Testovi
+
+`infrastructure/nas/ci.sh` šalje radno stablo na NAS (`ci.sh <ref>` šalje `git archive <ref>`), pa tamo radi
+`pnpm install --frozen-lockfile`, build, `pnpm test` i `pnpm typecheck` kroz `docker exec` u
+`hotel-ci-runner-claude`; exit 0 samo kad je sve zeleno. `ci.sh --lock` ponovo pravi `pnpm-lock.yaml`
+na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
 
 ### Pokretanje i ažuriranje `claude-hotel`
 

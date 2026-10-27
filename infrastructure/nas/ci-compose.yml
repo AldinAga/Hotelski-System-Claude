@@ -1,0 +1,42 @@
+# Long-running CI helpers for the hotel system on the NAS.
+#
+# Synology's Container Manager mails "stopped unexpectedly" for EVERY container
+# that exits, so builds and test runs never live in throwaway containers. These
+# two stay up and ci.sh works through `docker exec`:
+#   hotel-ci-runner-claude        Node 20, runs as claude-ci so the files it writes
+#                                 into /volume1/ci/hotel stay deletable by the next
+#                                 run; the registry token is mounted read-only.
+#   hotel-postgres-test-claude    disposable test database: data on tmpfs, fsync off,
+#                                 no published port.
+name: claude-hotel-ci
+
+services:
+  hotel-ci-runner-claude:
+    image: node:20-bookworm-slim
+    container_name: hotel-ci-runner-claude
+    restart: unless-stopped
+    init: true
+    user: '${CI_UID:?}:${CI_GID:?}'
+    command: ['sleep', 'infinity']
+    working_dir: /ci/hotel
+    environment:
+      HOME: /tmp
+      npm_config_store_dir: /ci/hotel/pnpm-store
+    volumes:
+      - /volume1/ci/hotel:/ci/hotel
+      - /volume1/ci/.npmrc:/tmp/.npmrc:ro
+
+  hotel-postgres-test-claude:
+    image: postgres:16-alpine
+    container_name: hotel-postgres-test-claude
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+    command: ['postgres', '-c', 'fsync=off', '-c', 'synchronous_commit=off', '-c', 'full_page_writes=off']
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=1g
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 20
