@@ -2,6 +2,7 @@ import { Global, Inject, Module, OnApplicationShutdown } from '@nestjs/common';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { Pool } from 'pg';
 import { AuditService } from '../common/audit.service';
+import { CLOCK, systemClock } from '../common/clock';
 import { PropertyContext } from '../common/property-context';
 import { createPool } from './pool';
 import * as schema from './schema';
@@ -13,10 +14,11 @@ import { DB, type Db, PG_POOL } from './tokens';
   providers: [
     { provide: PG_POOL, useFactory: (): Pool => createPool() },
     { provide: DB, inject: [PG_POOL], useFactory: (pool: Pool): Db => drizzle(pool, { schema }) },
+    { provide: CLOCK, useValue: systemClock },
     AuditService,
     PropertyContext,
   ],
-  exports: [PG_POOL, DB, AuditService, PropertyContext],
+  exports: [PG_POOL, DB, CLOCK, AuditService, PropertyContext],
 })
 export class DatabaseModule implements OnApplicationShutdown {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}

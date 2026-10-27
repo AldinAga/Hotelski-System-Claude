@@ -14,6 +14,7 @@ import { LICENSING_CONFIG, parseRootKeySet, type LicensingConfig } from '../src/
 import { SecretBox } from '../src/licensing/secret-box';
 import { createTestDb, type TestDb } from './db';
 import { startFakeCentralAdmin, type FakeCentralAdmin } from './fake-central-admin';
+import { seedUser, sessionCookieFor } from './auth-helpers';
 import { discoverRoutes, expressRouteCount } from './routes';
 
 const DAY_MS = 86_400_000;
@@ -111,7 +112,10 @@ describe('licensed routes (e2e)', () => {
         const offenders = discoverRoutes(app).filter((r) => !r.annotated).map((r) => r.route);
         expect(offenders).toEqual(['GET /forgotten (ForgottenController.find)']);
         // And the guard refuses it at runtime as well.
-        const res = await request(app.getHttpServer()).get('/forgotten');
+        const user = await seedUser(t, 'receptionist');
+        const res = await request(app.getHttpServer())
+          .get('/forgotten')
+          .set('Cookie', await sessionCookieFor(app, user.id));
         expect(res.status).toBe(403);
         expect(res.body.code).toBe('route_not_classified');
       } finally {
@@ -122,8 +126,13 @@ describe('licensed routes (e2e)', () => {
 
   describe('the global guard', () => {
     let app: INestApplication;
+    let cookie: string;
+    // Every request is signed in, so what refuses is the licence, not AuthGuard.
+    const get = (path: string) => request(app.getHttpServer()).get(path).set('Cookie', cookie);
+    const post = (path: string) => request(app.getHttpServer()).post(path).set('Cookie', cookie);
     beforeEach(async () => {
       app = await boot(config, [TestReservationsController]);
+      cookie = await sessionCookieFor(app, (await seedUser(t, 'receptionist')).id);
     });
     afterEach(async () => {
       await app.close();
@@ -136,39 +145,35 @@ describe('licensed routes (e2e)', () => {
 
     it('not activated: licensed routes 403 not_activated; /health and /licence answer', async () => {
       await app.get(LicenceService).reload();
-      const server = app.getHttpServer();
-      const res = await request(server).get('/test-reservations');
+      const res = await get('/test-reservations');
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('not_activated');
-      expect((await request(server).get('/health')).status).toBe(200);
-      const licence = await request(server).get('/licence');
+      expect((await request(app.getHttpServer()).get('/health')).status).toBe(200);
+      const licence = await get('/licence');
       expect(licence.status).toBe(200);
       expect(licence.body).toMatchObject({ activated: false, state: 'NOT_ACTIVATED' });
     });
 
     it('VALID: reservation.view and reservation.create pass', async () => {
       await activateSafeMode();
-      const server = app.getHttpServer();
-      expect((await request(server).get('/test-reservations')).status).toBe(200);
-      expect((await request(server).post('/test-reservations')).status).toBe(201);
+      expect((await get('/test-reservations')).status).toBe(200);
+      expect((await post('/test-reservations')).status).toBe(201);
     });
 
     it('reservation.create in safe mode: 403 safe_mode_blocked; reservation.view still works', async () => {
       await activateSafeMode();
       clock = new Date(clock.getTime() + 40 * DAY_MS); // past grace_until (issue + 37 days)
-      const server = app.getHttpServer();
-
-      const create = await request(server).post('/test-reservations');
+      const create = await post('/test-reservations');
       expect(create.status).toBe(403);
       expect(create.body).toMatchObject({ code: 'safe_mode_blocked' });
 
-      expect((await request(server).get('/test-reservations')).status).toBe(200);
-      expect((await request(server).get('/licence')).body).toMatchObject({ state: 'EXPIRED' });
+      expect((await get('/test-reservations')).status).toBe(200);
+      expect((await get('/licence')).body).toMatchObject({ state: 'EXPIRED' });
     });
 
     it('GET /licence returns the snapshot without signature or keys', async () => {
       await activateSafeMode();
-      const res = await request(app.getHttpServer()).get('/licence');
+      const res = await get('/licence');
       expect(res.status).toBe(200);
       expect(res.body).toEqual(app.get(LicenceService).snapshot());
       expect(Object.keys(res.body).sort()).toEqual(['activated', 'graceUntil', 'limits', 'modules', 'state', 'validUntil']);

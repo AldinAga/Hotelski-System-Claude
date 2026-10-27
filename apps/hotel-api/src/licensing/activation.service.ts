@@ -51,6 +51,18 @@ function sameSignedSet(a: SignedKeySet, b: unknown): boolean {
   }
 }
 
+/**
+ * The Admin Panel refused the activation (a 4xx with its own code). Same code
+ * and status as the parent answered; the class lets an HTTP route translate
+ * it into the hotel's own error namespace (a parent 401 is not a hotel 401).
+ */
+export class ParentRefusedError extends DomainError {
+  constructor(parentCode: string, message: string, status: number) {
+    super(parentCode, message, status);
+    this.name = 'ParentRefusedError';
+  }
+}
+
 function rejected(reason: string): DomainError {
   return new DomainError(
     'activation_rejected',
@@ -150,7 +162,7 @@ export class ActivationService {
     try {
       return await client.activate(code, publicKey);
     } catch (err) {
-      if (err instanceof ParentRefusal) throw new DomainError(err.code, err.message, err.status);
+      if (err instanceof ParentRefusal) throw new ParentRefusedError(err.code, err.message, err.status);
       if (err instanceof ParentUnavailable) {
         throw new DomainError(
           'central_admin_unavailable',

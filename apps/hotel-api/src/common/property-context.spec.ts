@@ -30,4 +30,21 @@ describe('PropertyContext', () => {
     await t.truncate();
     expect(await ctx.id()).toBe(row.id);
   });
+
+  it('reset() forgets the cached id', async () => {
+    const [first] = await t.db.insert(property).values({ name: 'Prvi' }).returning();
+    const ctx = new PropertyContext(t.db);
+    expect(await ctx.id()).toBe(first.id);
+
+    await t.truncate();
+    const [second] = await t.db.insert(property).values({ name: 'Drugi' }).returning();
+    ctx.reset();
+    expect(await ctx.id()).toBe(second.id);
+  });
+
+  it('the database refuses a second property (property_singleton)', async () => {
+    await t.pool.query(`INSERT INTO property (name) VALUES ('Prvi')`);
+    const err = await t.pool.query(`INSERT INTO property (name) VALUES ('Drugi')`).catch((e) => e);
+    expect(err).toMatchObject({ code: '23505', constraint: 'property_singleton' });
+  });
 });

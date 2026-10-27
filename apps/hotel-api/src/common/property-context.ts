@@ -19,4 +19,13 @@ export class PropertyContext {
     this.cached = row.id;
     return row.id;
   }
+
+  /**
+   * Forgets the cached id. Production never needs it (the property, once
+   * created, never changes); tests call it after truncating the database so a
+   * long-lived app does not keep a deleted property's id.
+   */
+  reset(): void {
+    this.cached = null;
+  }
 }
