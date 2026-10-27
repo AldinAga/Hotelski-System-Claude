@@ -5,7 +5,7 @@ import { SetupService, type SetupStatus } from './setup.service';
 
 // Before setup there is neither a user nor a licence: the setup token from the
 // boot log is what authorises these calls. All of them answer 410 setup_done
-// once the owner exists.
+// once the owner has confirmed their TOTP (POST /setup/confirm).
 @Controller('setup')
 @Public()
 @Unlicensed()
@@ -27,5 +27,12 @@ export class SetupController {
   @Post('owner')
   owner(@Body() body: unknown): Promise<{ totpUri: string }> {
     return this.setup.createOwner(body);
+  }
+
+  @Post('confirm')
+  @HttpCode(200)
+  async confirm(@Body() body: unknown): Promise<{ done: true }> {
+    await this.setup.confirm(body);
+    return { done: true };
   }
 }

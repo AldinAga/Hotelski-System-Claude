@@ -19,8 +19,9 @@ import { LicenceService } from '../licensing/licence.service';
 import { hashPassword } from './password';
 import { requiresTotp, type AuthUser } from './sessions.service';
 import { newTotpSecret, totpUri } from './totp';
+import { issuePendingTotp } from './totp-reset';
 
-/** Transaction-scoped advisory lock: counting active users and changing them is one step. */
+/** Transaction-scoped advisory lock: every change to users is serialised on it. */
 export const USERS_LOCK_KEY = 7_301_004;
 
 export interface UserView {
@@ -43,6 +44,10 @@ function userNotFound(): DomainError {
   return new DomainError('user_not_found', 'Korisnik ne postoji.', 404);
 }
 
+function cannotModifySelf(): DomainError {
+  return new DomainError('cannot_modify_self', 'Svoj nalog ne možete menjati ovde.', 409);
+}
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -60,15 +65,25 @@ export class UsersService {
     const password = requireRawString(b, 'password');
     if (role === 'owner' && actor.role !== 'owner') throw roleNotAllowed();
     const passwordHash = await hashPassword(password);
+    // Armed by the user's first login with a code from it.
     const totpSecret = requiresTotp(role) ? newTotpSecret() : null;
     const propertyId = await this.property.id();
 
     try {
       return await this.db.transaction(async (tx) => {
+        await this.lockAsActor(tx, actor);
         await this.assertRoomForOneMore(tx, propertyId);
         const [row] = await tx
           .insert(appUser)
-          .values({ propertyId, email, name, role, passwordHash, totpSecret })
+          .values({
+            propertyId,
+            email,
+            name,
+            role,
+            passwordHash,
+            totpSecret,
+            totpState: totpSecret ? 'pending' : 'none',
+          })
           .returning();
         const view: UserView = { id: row.id, email: row.email, name: row.name, role: row.role, active: row.active };
         await this.audit.record(tx, {
@@ -89,7 +104,11 @@ export class UsersService {
     }
   }
 
-  /** Changes role and/or active. Deactivation ends the user's sessions. */
+  /**
+   * Changes role and/or active. Any role change or deactivation ends the
+   * user's sessions, so rights a session never proved (a password-only
+   * session promoted to manager) cannot carry over.
+   */
   async update(actor: AuthUser, id: string, body: unknown): Promise<UserView> {
     if (!isUuid(id)) throw userNotFound();
     const b = asBody(body);
@@ -98,36 +117,32 @@ export class UsersService {
     const active = b.active as boolean | undefined;
     if (role === undefined && active === undefined) throw validationFailed('role', 'Navedite ulogu ili aktivnost.');
     // Keeps at least the acting owner: nobody can demote or lock out themselves.
-    if (id === actor.id) {
-      throw new DomainError('cannot_modify_self', 'Svoj nalog ne možete menjati ovde.', 409);
-    }
+    if (id === actor.id) throw cannotModifySelf();
     const propertyId = await this.property.id();
 
     return this.db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`);
-      const [target] = await tx
-        .select()
-        .from(appUser)
-        .where(and(eq(appUser.id, id), eq(appUser.propertyId, propertyId)))
-        .for('update');
-      if (!target) throw userNotFound();
+      await this.lockAsActor(tx, actor);
+      const target = await this.lockTarget(tx, id, propertyId);
       if (actor.role !== 'owner' && (target.role === 'owner' || role === 'owner')) throw roleNotAllowed();
 
       const nextRole = role ?? target.role;
       const nextActive = active ?? target.active;
-      if (nextActive && !target.active) await this.assertRoomForOneMore(tx, propertyId, false);
+      if (nextActive && !target.active) await this.assertRoomForOneMore(tx, propertyId);
 
-      const newSecret = requiresTotp(nextRole) && !target.totpSecret ? newTotpSecret() : null;
+      // A role that needs TOTP gets a fresh pending secret unless one is armed already.
+      const newSecret = requiresTotp(nextRole) && target.totpState !== 'confirmed' ? newTotpSecret() : null;
       const [row] = await tx
         .update(appUser)
         .set({
           role: nextRole,
           active: nextActive,
-          ...(newSecret ? { totpSecret: newSecret, totpLastStep: null } : {}),
+          ...(newSecret ? { totpSecret: newSecret, totpState: 'pending' as const, totpLastStep: null } : {}),
         })
         .where(eq(appUser.id, id))
         .returning();
-      if (!nextActive) await tx.delete(userSession).where(eq(userSession.userId, id));
+      if (!nextActive || nextRole !== target.role) {
+        await tx.delete(userSession).where(eq(userSession.userId, id));
+      }
 
       await this.audit.record(tx, {
         propertyId,
@@ -143,9 +158,55 @@ export class UsersService {
     });
   }
 
-  /** Licence limit `users` against the active users plus one; takes the users lock unless held. */
-  private async assertRoomForOneMore(tx: Tx, propertyId: string, lock = true): Promise<void> {
-    if (lock) await tx.execute(sql`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`);
+  /**
+   * A new pending TOTP secret for an owner or manager who lost theirs; their
+   * sessions end. Owner only (the route says so). The last owner's own
+   * recovery is the CLI, not this.
+   */
+  async resetTotp(actor: AuthUser, id: string): Promise<{ totpUri: string }> {
+    if (!isUuid(id)) throw userNotFound();
+    if (id === actor.id) throw cannotModifySelf();
+    const propertyId = await this.property.id();
+    return this.db.transaction(async (tx) => {
+      await this.lockAsActor(tx, actor);
+      const target = await this.lockTarget(tx, id, propertyId);
+      if (!requiresTotp(target.role)) {
+        throw new DomainError('totp_not_applicable', 'Ova uloga se prijavljuje bez koda za autentifikaciju.', 409);
+      }
+      const uri = await issuePendingTotp(tx, this.audit, target, actor.id, 'api');
+      return { totpUri: uri };
+    });
+  }
+
+  /**
+   * Takes the users lock, then re-reads the actor: AuthGuard saw them before
+   * the lock, and a concurrent change (two owners deactivating each other)
+   * may have removed their rights since. Refuses unless they are still active
+   * with the same role.
+   */
+  private async lockAsActor(tx: Tx, actor: AuthUser): Promise<void> {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`);
+    const [now] = await tx
+      .select({ role: appUser.role, active: appUser.active })
+      .from(appUser)
+      .where(eq(appUser.id, actor.id));
+    if (!now || !now.active || now.role !== actor.role) {
+      throw new DomainError('actor_changed', 'Vaš nalog je u međuvremenu izmenjen. Prijavite se ponovo.', 409);
+    }
+  }
+
+  private async lockTarget(tx: Tx, id: string, propertyId: string) {
+    const [target] = await tx
+      .select()
+      .from(appUser)
+      .where(and(eq(appUser.id, id), eq(appUser.propertyId, propertyId)))
+      .for('update');
+    if (!target) throw userNotFound();
+    return target;
+  }
+
+  /** Licence limit `users` against the active users plus one. Call under the users lock. */
+  private async assertRoomForOneMore(tx: Tx, propertyId: string): Promise<void> {
     const [{ n }] = await tx
       .select({ n: count() })
       .from(appUser)

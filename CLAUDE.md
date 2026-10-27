@@ -73,6 +73,14 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
 - Provera lozinke radi se preko Docker mreže (iz drugog kontejnera). Unutar Postgres kontejnera
   `127.0.0.1` prolazi bez lozinke, pa test tu ne dokazuje ništa.
 
+### Oporavak TOTP-a
+
+Vlasnik resetuje TOTP menadžeru ili drugom vlasniku kroz `POST /users/:id/reset-totp`. Ako je poslednji
+vlasnik izgubio aplikaciju za autentifikaciju, na NAS-u:
+`docker exec hotel-api-claude node dist/auth/reset-totp-cli.js --email <email>`. Komanda ispisuje novi
+`otpauth://` URI (QR), gasi sve sesije tog korisnika, a nova tajna postaje aktivna prvom prijavom sa kodom iz nje.
+URI je tajna: ne čuva se u logu ni u repou.
+
 ## Portovi
 
 Novi servis dobija sledeći slobodan port iz opsega `4200–4299` i upisuje se u tabelu, `.env.example` i

@@ -50,6 +50,9 @@ export const installationLicence = pgTable('installation_licence', {
 
 export const USER_ROLES = ['owner', 'manager', 'receptionist', 'housekeeping'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
+/** See migrations/0004_totp_enrolment.sql. */
+export const TOTP_STATES = ['none', 'setup', 'pending', 'confirmed'] as const;
+export type TotpState = (typeof TOTP_STATES)[number];
 
 export const appUser = pgTable('app_user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -62,6 +65,7 @@ export const appUser = pgTable('app_user', {
   passwordHash: text('password_hash').notNull(),
   totpSecret: text('totp_secret'),
   totpLastStep: bigint('totp_last_step', { mode: 'number' }),
+  totpState: text('totp_state', { enum: TOTP_STATES }).notNull().default('none'),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -163,45 +163,129 @@ describe('first-run setup (e2e)', () => {
     expect(await count('app_user')).toBe(0);
   });
 
-  it('creates property, legal profile and owner; returns the TOTP URI; then /setup/* answers 410', async () => {
-    expect((await activate(token)).status).toBe(200);
-    const res = await request(server()).post('/setup/owner').send({ ...owner, setupToken: token });
-    expect(res.status).toBe(201);
-    expect(Object.keys(res.body)).toEqual(['totpUri']);
-    const uri = new URL(res.body.totpUri);
-    expect(res.body.totpUri.startsWith('otpauth://totp/Hotel:')).toBe(true);
-    expect(uri.host).toBe('totp');
-    expect(decodeURIComponent(uri.pathname)).toBe(`/Hotel:${owner.email}`);
-    expect(uri.searchParams.get('issuer')).toBe('Hotel');
-    const secret = uri.searchParams.get('secret')!;
-    expect(secret).toMatch(/^[A-Z2-7]{32}$/);
+  describe('owner and TOTP confirmation', () => {
+    const ownerStep = (extra: Record<string, unknown> = {}) =>
+      request(server())
+        .post('/setup/owner')
+        .send({ ...owner, setupToken: token, ...extra });
+    const confirm = (totp: string, setupToken = token) =>
+      request(server()).post('/setup/confirm').send({ setupToken, totp });
+    const secretOf = (uri: string): string => new URL(uri).searchParams.get('secret')!;
+    const signIn = (totp?: string) =>
+      request(server()).post('/auth/login').send({ email: owner.email, password: owner.password, totp });
+    // confirm uses the current step; a later login needs the next one.
+    const nextCode = (secret: string): string => totpGenerate(secret, new Date(Date.now() + 30_000));
 
-    const { rows: props } = await ta.testDb.pool.query(
-      'SELECT p.name, l.kind FROM property p JOIN legal_profile l ON l.property_id = p.id',
-    );
-    expect(props).toEqual([{ name: 'Hotel Tara', kind: 'legal_entity' }]);
-    const { rows: users } = await ta.testDb.pool.query('SELECT email, name, role, active FROM app_user');
-    expect(users).toEqual([{ email: owner.email, name: 'Vlasnik', role: 'owner', active: true }]);
-    expect(await count('setup_token')).toBe(0);
+    beforeEach(async () => {
+      expect((await activate(token)).status).toBe(200);
+    });
 
-    // The owner signs in with the enrolled secret.
-    const signIn = await request(server())
-      .post('/auth/login')
-      .send({ email: owner.email, password: owner.password, totp: totpGenerate(secret, new Date()) });
-    expect(signIn.status).toBe(200);
-    expect(cookieFrom(signIn)).not.toBeNull();
+    it('creates property, legal profile and an unconfirmed owner; setup stays open', async () => {
+      const res = await ownerStep();
+      expect(res.status).toBe(201);
+      expect(Object.keys(res.body)).toEqual(['totpUri']);
+      const uri = new URL(res.body.totpUri);
+      expect(res.body.totpUri.startsWith('otpauth://totp/Hotel:')).toBe(true);
+      expect(uri.host).toBe('totp');
+      expect(decodeURIComponent(uri.pathname)).toBe(`/Hotel:${owner.email}`);
+      expect(uri.searchParams.get('issuer')).toBe('Hotel');
+      expect(secretOf(res.body.totpUri)).toMatch(/^[A-Z2-7]{32}$/);
 
-    for (const [method, path] of [
-      ['get', '/setup/status'],
-      ['post', '/setup/activate'],
-      ['post', '/setup/owner'],
-    ] as const) {
-      const done = await request(server())[method](path).send({ ...owner, setupToken: token, code: 'x' });
-      expect(done.status).toBe(410);
-      expect(done.body.code).toBe('setup_done');
-    }
-    // A boot after setup issues no new token.
-    expect(await app.get(SetupService).prepareOnBoot()).toBeNull();
+      const { rows: props } = await ta.testDb.pool.query(
+        'SELECT p.name, l.kind FROM property p JOIN legal_profile l ON l.property_id = p.id',
+      );
+      expect(props).toEqual([{ name: 'Hotel Tara', kind: 'legal_entity' }]);
+      const { rows: users } = await ta.testDb.pool.query('SELECT email, name, role, active, totp_state FROM app_user');
+      expect(users).toEqual([{ email: owner.email, name: 'Vlasnik', role: 'owner', active: true, totp_state: 'setup' }]);
+
+      expect(await count('setup_token')).toBe(1);
+      expect((await request(server()).get('/setup/status')).body).toEqual({
+        activated: true,
+        hasOwner: true,
+        hasProperty: true,
+      });
+
+      // Not armed yet: even a valid code does not sign the owner in.
+      const early = await signIn(totpGenerate(secretOf(res.body.totpUri), new Date()));
+      expect(early.status).toBe(401);
+      expect(early.body.code).toBe('totp_not_enrolled');
+    });
+
+    it('repeating the owner step returns a new URI and creates nothing twice', async () => {
+      const first = await ownerStep();
+      expect(first.status).toBe(201);
+      const second = await ownerStep({ name: 'Vlasnik Drugi', propertyName: 'Hotel Drina' });
+      expect(second.status).toBe(201);
+      expect(secretOf(second.body.totpUri)).not.toBe(secretOf(first.body.totpUri));
+
+      expect(await count('property')).toBe(1);
+      expect(await count('legal_profile')).toBe(1);
+      expect(await count('app_user')).toBe(1);
+      const { rows } = await ta.testDb.pool.query('SELECT p.name AS property, u.name FROM property p, app_user u');
+      expect(rows).toEqual([{ property: 'Hotel Drina', name: 'Vlasnik Drugi' }]);
+
+      // Only the newest secret confirms.
+      const stale = await confirm(totpGenerate(secretOf(first.body.totpUri), new Date()));
+      expect(stale.status).toBe(422);
+      expect(stale.body.code).toBe('totp_invalid');
+      expect((await confirm(totpGenerate(secretOf(second.body.totpUri), new Date()))).status).toBe(200);
+    });
+
+    it('confirm: wrong code 422 totp_invalid, no owner yet 409 owner_missing, wrong token 403', async () => {
+      const none = await confirm('123456');
+      expect(none.status).toBe(409);
+      expect(none.body.code).toBe('owner_missing');
+
+      const res = await ownerStep();
+      const right = totpGenerate(secretOf(res.body.totpUri), new Date());
+      const wrongCode = right === '000000' ? '111111' : '000000';
+      const wrong = await confirm(wrongCode);
+      expect(wrong.status).toBe(422);
+      expect(wrong.body.code).toBe('totp_invalid');
+
+      const wrongToken = token === 'AAAA-AAAA-AAAA' ? 'BBBB-BBBB-BBBB' : 'AAAA-AAAA-AAAA';
+      expect((await confirm(right, wrongToken)).status).toBe(403);
+
+      // Still open and still unconfirmed.
+      expect(await count('setup_token')).toBe(1);
+      expect((await request(server()).get('/setup/status')).status).toBe(200);
+    });
+
+    it('the first code confirms: token deleted, owner signs in, every /setup/* answers 410', async () => {
+      const res = await ownerStep();
+      const secret = secretOf(res.body.totpUri);
+      const ok = await confirm(totpGenerate(secret, new Date()));
+      expect(ok.status).toBe(200);
+      expect(await count('setup_token')).toBe(0);
+      const { rows } = await ta.testDb.pool.query('SELECT totp_state FROM app_user');
+      expect(rows).toEqual([{ totp_state: 'confirmed' }]);
+
+      const login = await signIn(nextCode(secret));
+      expect(login.status).toBe(200);
+      expect(cookieFrom(login)).not.toBeNull();
+
+      for (const [method, path] of [
+        ['get', '/setup/status'],
+        ['post', '/setup/activate'],
+        ['post', '/setup/owner'],
+        ['post', '/setup/confirm'],
+      ] as const) {
+        const done = await request(server())[method](path).send({ ...owner, setupToken: token, code: 'x', totp: '1' });
+        expect(done.status).toBe(410);
+        expect(done.body.code).toBe('setup_done');
+      }
+      // A boot after setup issues no new token.
+      expect(await app.get(SetupService).prepareOnBoot()).toBeNull();
+    });
+
+    it('a restart between owner step and confirmation issues a new token that finishes setup', async () => {
+      const res = await ownerStep();
+      const next = (await app.get(SetupService).prepareOnBoot())!;
+      expect(next).toMatch(TOKEN_FORMAT);
+      const code = totpGenerate(secretOf(res.body.totpUri), new Date());
+      expect((await confirm(code, token)).status).toBe(403);
+      expect((await confirm(code, next)).status).toBe(200);
+    });
   });
 
   it('validates the owner input', async () => {

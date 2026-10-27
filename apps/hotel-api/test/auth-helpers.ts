@@ -3,7 +3,7 @@ import type { Response } from 'supertest';
 import { hashPassword } from '../src/auth/password';
 import { SessionsService } from '../src/auth/sessions.service';
 import { newTotpSecret } from '../src/auth/totp';
-import type { UserRole } from '../src/db/schema';
+import type { TotpState, UserRole } from '../src/db/schema';
 import type { TestDb } from './db';
 
 export const PASSWORD = 'tacna-lozinka-123';
@@ -24,20 +24,24 @@ export async function ensureProperty(t: TestDb): Promise<string> {
   return created.rows[0].id;
 }
 
-/** Inserts a user directly. Owners and managers get a TOTP secret, as the API gives them. */
+/**
+ * Inserts a user directly. Owners and managers get a TOTP secret that is
+ * already armed ('confirmed') unless `totpState` says otherwise.
+ */
 export async function seedUser(
   t: TestDb,
   role: UserRole,
-  opts: { email?: string; password?: string; active?: boolean } = {},
+  opts: { email?: string; password?: string; active?: boolean; totpState?: TotpState } = {},
 ): Promise<SeededUser> {
   const propertyId = await ensureProperty(t);
   const email = opts.email ?? `${role}-${Math.random().toString(36).slice(2, 8)}@hotel.test`;
   const password = opts.password ?? PASSWORD;
-  const totpSecret = role === 'owner' || role === 'manager' ? newTotpSecret() : null;
+  const totpState = opts.totpState ?? (role === 'owner' || role === 'manager' ? 'confirmed' : 'none');
+  const totpSecret = totpState === 'none' ? null : newTotpSecret();
   const { rows } = await t.pool.query<{ id: string }>(
-    `INSERT INTO app_user (property_id, email, name, role, password_hash, totp_secret, active)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [propertyId, email, `Ime ${role}`, role, await hashPassword(password), totpSecret, opts.active ?? true],
+    `INSERT INTO app_user (property_id, email, name, role, password_hash, totp_secret, totp_state, active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [propertyId, email, `Ime ${role}`, role, await hashPassword(password), totpSecret, totpState, opts.active ?? true],
   );
   return { id: rows[0].id, email, password, role, totpSecret };
 }

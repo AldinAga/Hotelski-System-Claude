@@ -386,12 +386,12 @@ describe('authentication (e2e)', () => {
       expect(back.body.code).toBe('limit_exceeded');
     });
 
-    it('deactivating a user ends their sessions; role changes apply at once', async () => {
+    it("a role change ends the user's sessions: a password-only session never acts as manager", async () => {
       await activate();
       const owner = await seedUser(ta.testDb, 'owner');
       const rec = await seedUser(ta.testDb, 'receptionist');
       const ownerCookie = await sessionCookieFor(app, owner.id);
-      const recCookie = await sessionCookieFor(app, rec.id);
+      const recCookie = cookieFrom(await login(rec))!;
 
       const promote = await request(server())
         .patch(`/users/${rec.id}`)
@@ -400,13 +400,133 @@ describe('authentication (e2e)', () => {
       expect(promote.status).toBe(200);
       expect(promote.body.role).toBe('manager');
       expect(promote.body.totpUri).toMatch(/^otpauth:\/\/totp\/Hotel:/);
-      expect((await request(server()).get('/auth/me').set('Cookie', recCookie)).body.role).toBe('manager');
+
+      // The session that only ever proved a password is gone.
+      const stale = await request(server()).get('/auth/me').set('Cookie', recCookie);
+      expect(stale.status).toBe(401);
+      expect(stale.body.code).toBe('session_required');
+
+      // Signing in as manager now takes a code from the new secret, which that arms.
+      expect((await login(rec)).body.code).toBe('totp_required');
+      const secret = new URL(promote.body.totpUri).searchParams.get('secret')!;
+      const asManager = await login(rec, totpGenerate(secret, clock));
+      expect(asManager.status).toBe(200);
+      expect(asManager.body.role).toBe('manager');
+      const { rows } = await ta.testDb.pool.query('SELECT totp_state FROM app_user WHERE id = $1', [rec.id]);
+      expect(rows[0].totp_state).toBe('confirmed');
+    });
+
+    it('deactivating a user ends their sessions', async () => {
+      await activate();
+      const owner = await seedUser(ta.testDb, 'owner');
+      const rec = await seedUser(ta.testDb, 'receptionist');
+      const ownerCookie = await sessionCookieFor(app, owner.id);
+      const recCookie = await sessionCookieFor(app, rec.id);
+      expect((await request(server()).get('/auth/me').set('Cookie', recCookie)).status).toBe(200);
 
       await request(server()).patch(`/users/${rec.id}`).set('Cookie', ownerCookie).send({ active: false }).expect(200);
       expect((await request(server()).get('/auth/me').set('Cookie', recCookie)).status).toBe(401);
 
       const { rows } = await ta.testDb.pool.query(`SELECT action FROM audit_log WHERE action = 'user.update'`);
-      expect(rows).toHaveLength(2);
+      expect(rows).toHaveLength(1);
+    });
+
+    it('demote and re-promote: an armed secret is kept, an unarmed one is replaced', async () => {
+      await activate();
+      const owner = await seedUser(ta.testDb, 'owner');
+      const cookie = await sessionCookieFor(app, owner.id);
+      const patch = (id: string, role: string) =>
+        request(server()).patch(`/users/${id}`).set('Cookie', cookie).send({ role });
+
+      const armed = await seedUser(ta.testDb, 'manager');
+      expect((await patch(armed.id, 'receptionist')).status).toBe(200);
+      const back = await patch(armed.id, 'manager');
+      expect(back.status).toBe(200);
+      expect(back.body.totpUri).toBeUndefined();
+      expect((await login(armed, codeNow(armed))).status).toBe(200);
+
+      const unarmed = await seedUser(ta.testDb, 'manager', { totpState: 'pending' });
+      expect((await patch(unarmed.id, 'receptionist')).status).toBe(200);
+      const again = await patch(unarmed.id, 'manager');
+      const fresh = new URL(again.body.totpUri).searchParams.get('secret')!;
+      expect(fresh).not.toBe(unarmed.totpSecret);
+      expect((await login(unarmed, codeNow(unarmed))).body.code).toBe('totp_required');
+      expect((await login(unarmed, totpGenerate(fresh, clock))).status).toBe(200);
+    });
+
+    it('two owners deactivating each other at once: at least one active owner remains', async () => {
+      await activate();
+      const a = await seedUser(ta.testDb, 'owner');
+      const b = await seedUser(ta.testDb, 'owner');
+      const ca = await sessionCookieFor(app, a.id);
+      const cb = await sessionCookieFor(app, b.id);
+      const results = await Promise.all([
+        request(server()).patch(`/users/${b.id}`).set('Cookie', ca).send({ active: false }),
+        request(server()).patch(`/users/${a.id}`).set('Cookie', cb).send({ active: false }),
+      ]);
+      expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+      const loser = results.find((r) => r.status !== 200)!;
+      expect([401, 409]).toContain(loser.status);
+      const { rows } = await ta.testDb.pool.query(`SELECT id FROM app_user WHERE role = 'owner' AND active`);
+      expect(rows).toHaveLength(1);
+    });
+
+    describe('TOTP enrolment and reset', () => {
+      it('an owner or manager without an armed secret: 401 totp_not_enrolled, also with a valid code', async () => {
+        for (const totpState of ['none', 'setup'] as const) {
+          const m = await seedUser(ta.testDb, 'manager', { totpState });
+          const code = m.totpSecret ? codeNow(m) : '123456';
+          const res = await login(m, code);
+          expect(res.status).toBe(401);
+          expect(res.body.code).toBe('totp_not_enrolled');
+        }
+      });
+
+      it('a pending secret is armed by the first login with a code from it', async () => {
+        const m = await seedUser(ta.testDb, 'manager', { totpState: 'pending' });
+        expect((await login(m)).body.code).toBe('totp_required');
+        expect((await login(m, codeNow(m))).status).toBe(200);
+        const { rows } = await ta.testDb.pool.query('SELECT totp_state FROM app_user WHERE id = $1', [m.id]);
+        expect(rows[0].totp_state).toBe('confirmed');
+      });
+
+      it("owner resets a manager's TOTP: new secret, sessions end, the old secret stops working", async () => {
+        await activate();
+        const owner = await seedUser(ta.testDb, 'owner');
+        const m = await seedUser(ta.testDb, 'manager');
+        const mCookie = cookieFrom(await login(m, codeNow(m)))!;
+        clock = new Date(clock.getTime() + 30_000);
+
+        const res = await request(server())
+          .post(`/users/${m.id}/reset-totp`)
+          .set('Cookie', await sessionCookieFor(app, owner.id));
+        expect(res.status).toBe(200);
+        expect(Object.keys(res.body)).toEqual(['totpUri']);
+        const fresh = new URL(res.body.totpUri).searchParams.get('secret')!;
+        expect(fresh).not.toBe(m.totpSecret);
+
+        expect((await request(server()).get('/auth/me').set('Cookie', mCookie)).status).toBe(401);
+        expect((await login(m, codeNow(m))).body.code).toBe('totp_required');
+        expect((await login(m, totpGenerate(fresh, clock))).status).toBe(200);
+        const { rows } = await ta.testDb.pool.query(`SELECT 1 FROM audit_log WHERE action = 'user.totp_reset'`);
+        expect(rows).toHaveLength(1);
+      });
+
+      it('reset-totp is owner only, not for oneself, and not for roles without TOTP', async () => {
+        await activate();
+        const owner = await seedUser(ta.testDb, 'owner');
+        const manager = await seedUser(ta.testDb, 'manager');
+        const rec = await seedUser(ta.testDb, 'receptionist');
+        const ownerCookie = await sessionCookieFor(app, owner.id);
+        const reset = (id: string, cookie: string) =>
+          request(server()).post(`/users/${id}/reset-totp`).set('Cookie', cookie);
+
+        const byManager = await reset(rec.id, await sessionCookieFor(app, manager.id));
+        expect(byManager.status).toBe(403);
+        expect(byManager.body.code).toBe('forbidden_role');
+        expect((await reset(owner.id, ownerCookie)).body.code).toBe('cannot_modify_self');
+        expect((await reset(rec.id, ownerCookie)).body.code).toBe('totp_not_applicable');
+      });
     });
 
     it('validates input: 422 validation_failed, 422 password_too_short, 409 email_taken, 404 user_not_found', async () => {

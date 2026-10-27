@@ -93,11 +93,20 @@ export class SessionsService {
     if (!user || !user.active || !passwordOk) throw invalidCredentials();
 
     if (requiresTotp(user.role)) {
-      // Fails closed: an owner or manager without a secret cannot sign in.
-      const step = user.totpSecret ? totpVerify(user.totpSecret, totpText, now, user.totpLastStep) : null;
+      // Fails closed: an owner or manager needs a secret that is armed
+      // ('confirmed') or waiting for its first code ('pending'). A secret from
+      // the first-run owner step is armed only by POST /setup/confirm.
+      if (!user.totpSecret || (user.totpState !== 'pending' && user.totpState !== 'confirmed')) {
+        throw new DomainError(
+          'totp_not_enrolled',
+          'Aplikacija za autentifikaciju još nije potvrđena za ovaj nalog. Obratite se vlasniku.',
+          401,
+        );
+      }
+      const step = totpVerify(user.totpSecret, totpText, now, user.totpLastStep);
       // Claimed only after the password passed, so a wrong password cannot
       // burn the real user's current code.
-      if (step === null || !(await this.consumeTotpStep(user.id, step))) throw totpRequired();
+      if (step === null || !(await this.consumeTotpStep(user.id, user.totpSecret, step))) throw totpRequired();
     }
 
     return this.db.transaction(async (tx) => {
@@ -176,13 +185,21 @@ export class SessionsService {
   /**
    * Replay guard: the UPDATE is the check. It succeeds only when `step` is
    * newer than the stored last step, so of two concurrent logins with one
-   * code only one gets a row back.
+   * code only one gets a row back. A 'pending' secret is armed by the same
+   * write: the code proved the user holds it.
    */
-  private async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+  private async consumeTotpStep(userId: string, secret: string, step: number): Promise<boolean> {
     const rows = await this.db
       .update(appUser)
-      .set({ totpLastStep: step })
-      .where(and(eq(appUser.id, userId), or(isNull(appUser.totpLastStep), lt(appUser.totpLastStep, step))))
+      .set({ totpLastStep: step, totpState: 'confirmed' })
+      .where(
+        and(
+          eq(appUser.id, userId),
+          // The secret the code was checked against: a reset in between must not be armed by it.
+          eq(appUser.totpSecret, secret),
+          or(isNull(appUser.totpLastStep), lt(appUser.totpLastStep, step)),
+        ),
+      )
       .returning({ id: appUser.id });
     return rows.length === 1;
   }
