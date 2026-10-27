@@ -2,7 +2,6 @@ import { generateKeyPairSync } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   EMPTY_MEMORY,
-  acceptKeySet,
   canonicalize,
   evaluateLicense,
   type KeySet,
@@ -18,6 +17,7 @@ import {
   type ActivationResponse,
   type CentralAdminClient,
 } from './central-admin.client';
+import { acceptNext, walkKeyChain } from './key-chain';
 import { alreadyActivated, LicenceStore } from './licence.store';
 import { LICENSING_CONFIG, type LicensingConfig } from './licensing.config';
 
@@ -28,9 +28,6 @@ export const PRODUCT = 'hotel';
 
 /** Transaction-scoped advisory lock serialising activations across API instances. */
 export const ACTIVATION_LOCK_KEY = 7_301_002;
-
-/** Upper bound on `GET /v1/keys?since=` pages walked in one activation. */
-const MAX_KEY_PAGES = 10;
 
 /**
  * A fresh Ed25519 pair for the installation. `seed` is the raw 32-byte private
@@ -184,16 +181,16 @@ export class ActivationService {
   ): Promise<{ trusted: KeySet; chain: SignedKeySet[] }> {
     let trusted = root;
     const chain: SignedKeySet[] = [];
-    let acceptance = acceptKeySet(offered, trusted);
+    let acceptance = acceptNext(offered, trusted);
     if (!acceptance.ok && acceptance.reason === 'unknown_key') {
-      const walked = await this.walkKeyChain(client, trusted);
+      const walked = await walkKeyChain(client, trusted, this.logger);
       trusted = walked.trusted;
       chain.push(...walked.accepted);
       // The offered set is normally the newest one the walk just accepted.
       // Re-checking it against the set it produced is not "stale" but
       // unknown_key (its signer is end-dated there), so recognise it by identity.
       if (walked.accepted.some((set) => sameSignedSet(set, offered))) return { trusted, chain };
-      acceptance = acceptKeySet(offered, trusted);
+      acceptance = acceptNext(offered, trusted);
     }
     if (acceptance.ok) {
       chain.push(offered);
@@ -202,43 +199,5 @@ export class ActivationService {
     if (acceptance.reason === 'stale_keyset') return { trusted, chain };
     this.logger.warn(`Activation key set refused: ${acceptance.reason}`);
     throw rejected(`keyset_${acceptance.reason}`);
-  }
-
-  /**
-   * Walks `GET /v1/keys?since=` one accepted set at a time. Stops at the first
-   * set that is refused for any reason other than stale, or when a page brings
-   * nothing new. A network failure ends the walk with what was accepted so far;
-   * the caller then refuses the offered set if it still does not chain.
-   */
-  private async walkKeyChain(
-    client: CentralAdminClient,
-    start: KeySet,
-  ): Promise<{ trusted: KeySet; accepted: SignedKeySet[] }> {
-    let trusted = start;
-    const accepted: SignedKeySet[] = [];
-    try {
-      for (let page = 0; page < MAX_KEY_PAGES; page++) {
-        const sets = await client.keySetsSince(trusted.issued_at);
-        let progressed = false;
-        let refused = false;
-        for (const set of sets) {
-          const acceptance = acceptKeySet(set, trusted);
-          if (acceptance.ok) {
-            trusted = acceptance.keySet;
-            accepted.push(set);
-            progressed = true;
-          } else if (acceptance.reason !== 'stale_keyset') {
-            this.logger.warn(`Key set in the published chain refused: ${acceptance.reason}`);
-            refused = true;
-            break;
-          }
-        }
-        if (!progressed || refused) break;
-      }
-    } catch (err) {
-      if (!(err instanceof ParentUnavailable || err instanceof ParentRefusal)) throw err;
-      this.logger.warn(`Could not fetch newer key sets: ${err.message}`);
-    }
-    return { trusted, accepted };
   }
 }

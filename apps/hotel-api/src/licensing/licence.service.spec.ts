@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import type { SignedKeySet } from '@platform/licensing';
 import { createTestDb, type TestDb } from '../../test/db';
 import { startFakeCentralAdmin, type FakeCentralAdmin, type IssueCodeOptions } from '../../test/fake-central-admin';
 import { AuditService } from '../common/audit.service';
@@ -239,28 +240,64 @@ describe('LicenceService', () => {
     expect(service.snapshot().state).toBe('VALID');
   });
 
-  it('the database is not a trust anchor: a stored chain that does not replay falls back to the root', async () => {
+  /**
+   * Rotates to k4 (licence signed by k4, chain root-1 > k2 > k3 stored), then
+   * forges the signature of chain element `index`. The stored key_set still
+   * holds k4, so trusting it instead of the replay would make the licence VALID.
+   */
+  async function rotateThenForgeChain(index: number): Promise<{ intact: SignedKeySet[] }> {
     await activate();
     await service.reload();
     fake.rotateKeys();
     await service.heartbeat();
     expect(service.snapshot().state).toBe('VALID');
-
-    // Tamper: keep the trusted set (which holds k4) but replace the chain with a foreign set.
     const record = (await store.get())!;
-    const last = record.keyChain[2];
-    const forged = { ...last, signature: (last.signature[0] === 'A' ? 'B' : 'A') + last.signature.slice(1) };
-    await t.pool.query('UPDATE installation_licence SET key_chain = $1', [
-      JSON.stringify([record.keyChain[0], record.keyChain[1], forged]),
-    ]);
-    // The stored trusted set still holds k4: trusting it would make the licence VALID.
+    expect(record.keyChain).toHaveLength(3);
+    const chain: SignedKeySet[] = [...record.keyChain];
+    const target = chain[index];
+    chain[index] = { ...target, signature: (target.signature[0] === 'A' ? 'B' : 'A') + target.signature.slice(1) };
+    await t.pool.query('UPDATE installation_licence SET key_chain = $1', [JSON.stringify(chain)]);
     expect((await store.get())!.keySet.keys.map((k) => k.key_id)).toContain('k4');
+    return { intact: record.keyChain };
+  }
 
+  it('the database is not a trust anchor: a forged chain element is not trusted', async () => {
+    await rotateThenForgeChain(2);
     fake.setDown(true);
     const restarted = newService();
     await restarted.reload();
-    // Only the root is trusted, so the k4-signed licence does not verify.
+    // Only root-1 > k2 > k3 chains, so the k4-signed licence does not verify.
     expect(restarted.snapshot()).toMatchObject({ state: 'INVALID', reason: 'unknown_key' });
+  });
+
+  it('a corrupted chain on restart recovers after start() with the fake reachable', async () => {
+    const { intact } = await rotateThenForgeChain(1);
+    const before = fake.requests.length;
+    const restarted = newService();
+    // Only start()'s own key refresh may do the recovery here.
+    jest.spyOn(restarted, 'heartbeat').mockResolvedValue();
+    try {
+      await restarted.start();
+      await restarted.idle();
+      expect(restarted.snapshot().state).toBe('VALID');
+      // The walk started from the prefix that did replay (the first set), not from the root.
+      const walk = fake.requests.slice(before).filter((r) => r.path.startsWith('/v1/keys?since='));
+      expect(walk[0].path).toBe(`/v1/keys?since=${encodeURIComponent(intact[0].payload.issued_at)}`);
+      // The stored chain is rebuilt from the published sets.
+      expect((await store.get())!.keyChain).toEqual(intact);
+    } finally {
+      restarted.stop();
+    }
+  });
+
+  it('a held licence that is INVALID unknown_key after a heartbeat triggers a key refresh', async () => {
+    await rotateThenForgeChain(1);
+    const restarted = newService();
+    await restarted.reload();
+    expect(restarted.snapshot()).toMatchObject({ state: 'INVALID', reason: 'unknown_key' });
+    // Same revision: the heartbeat fetches no licence, so only the recovery can help.
+    await restarted.heartbeat();
+    expect(restarted.snapshot().state).toBe('VALID');
   });
 
   it('daily key refresh appends newly published sets to the full chain', async () => {
@@ -333,16 +370,16 @@ describe('LicenceService', () => {
       expect(heartbeat).toHaveBeenCalledTimes(2);
       expect(HEARTBEAT_INTERVAL_MS).toBe(5 * 60_000);
 
-      expect(refresh).toHaveBeenCalledTimes(0);
+      expect(refresh).toHaveBeenCalledTimes(1); // once at start
       jest.advanceTimersByTime(KEY_REFRESH_INTERVAL_MS);
-      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(refresh).toHaveBeenCalledTimes(2);
       expect(KEY_REFRESH_INTERVAL_MS).toBe(DAY_MS);
 
       service.stop();
       const calls = heartbeat.mock.calls.length;
       jest.advanceTimersByTime(2 * KEY_REFRESH_INTERVAL_MS);
       expect(heartbeat).toHaveBeenCalledTimes(calls);
-      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(refresh).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
     }
@@ -374,6 +411,14 @@ describe('LicenceService', () => {
       const err = catchDomain(() => service.assertLimit('users', 1));
       expect(err.code).toBe('limit_exceeded');
       expect(err.details).toEqual({ key: 'users', limit: 0, wanted: 1 });
+    });
+
+    it('wanted that is not a non-negative safe integer is a caller error, even with no limit', async () => {
+      await withLimits({ rooms: null });
+      for (const wanted of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+        expect(() => service.assertLimit('rooms', wanted)).toThrow(TypeError);
+      }
+      expect(() => service.assertLimit('rooms', 0)).not.toThrow();
     });
 
     it('not activated: limit_exceeded', async () => {

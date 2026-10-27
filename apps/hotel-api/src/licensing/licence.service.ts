@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import {
-  acceptKeySet,
   evaluateLicense,
   type KeySet,
   type LicenseEnvelope,
@@ -17,6 +16,7 @@ import {
   type CentralAdminClient,
   type InstallationAuth,
 } from './central-admin.client';
+import { replayKeyChain, walkKeyChain } from './key-chain';
 import { LicenceStore, type LicenceRecord } from './licence.store';
 import { LICENSING_CONFIG, type LicensingConfig } from './licensing.config';
 
@@ -24,8 +24,6 @@ export const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 export const KEY_REFRESH_INTERVAL_MS = 24 * 60 * 60_000;
 /** How long an evaluation is reused; any licence or key change drops it at once. */
 export const SNAPSHOT_TTL_MS = 60_000;
-/** Upper bound on `GET /v1/keys?since=` pages walked in one refresh. */
-const MAX_KEY_PAGES = 10;
 
 /** apps/hotel-api/package.json, from src/licensing and from dist/licensing alike. */
 function readVersion(): string {
@@ -96,8 +94,10 @@ const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
  * The licence in operation: holds the stored licence, evaluates it against the
  * key set that chains from HOTEL_ROOT_KEYSET, and keeps both fresh.
  *
- * Timers: start() runs one heartbeat at once, then every HEARTBEAT_INTERVAL_MS,
- * and a key refresh every KEY_REFRESH_INTERVAL_MS. heartbeat(), refreshKeys()
+ * Timers: start() runs one heartbeat and one key refresh at once, then a
+ * heartbeat every HEARTBEAT_INTERVAL_MS and a key refresh every
+ * KEY_REFRESH_INTERVAL_MS; a heartbeat after which the held licence is INVALID
+ * unknown_key also refreshes the keys. heartbeat(), refreshKeys()
  * and reload() are public so tests (and activation) can drive them directly;
  * concurrent calls of the same one share a single run.
  *
@@ -128,6 +128,14 @@ export class LicenceService implements OnApplicationShutdown {
     ];
     for (const timer of this.timers) timer.unref();
     void this.heartbeat();
+    // At once, not after 24 h: a stored chain that stopped replaying, or a
+    // rotation while the API was down, must not leave the licence unverifiable.
+    void this.refreshKeys();
+  }
+
+  /** Resolves when the heartbeat and key refresh in flight (if any) are done. Starts nothing. */
+  async idle(): Promise<void> {
+    await Promise.all([this.heartbeatRun, this.keysRun]);
   }
 
   stop(): void {
@@ -169,6 +177,10 @@ export class LicenceService implements OnApplicationShutdown {
    * carry (or no usable licence) is refused: unknown is closed.
    */
   assertLimit(key: LimitKey, wanted: number): void {
+    // A NaN would pass every `wanted > limit` comparison: a caller bug, not a quantity.
+    if (!Number.isSafeInteger(wanted) || wanted < 0) {
+      throw new TypeError(`assertLimit: wanted must be a non-negative safe integer (got ${wanted})`);
+    }
     const { limits } = this.snapshot();
     const limit = Object.prototype.hasOwnProperty.call(limits, key) ? limits[key] : undefined;
     if (limit === null) return;
@@ -186,6 +198,7 @@ export class LicenceService implements OnApplicationShutdown {
   heartbeat(): Promise<void> {
     if (!this.heartbeatRun) {
       this.heartbeatRun = this.runHeartbeat()
+        .then(() => this.recoverTrust())
         .catch((err) => this.logger.error(`Heartbeat failed unexpectedly: ${(err as Error)?.message}`))
         .finally(() => {
           this.heartbeatRun = null;
@@ -255,13 +268,10 @@ export class LicenceService implements OnApplicationShutdown {
   }
 
   /**
-   * Ruling 7: the database is not a trust anchor. The stored chain is
-   * accepted set by set from HOTEL_ROOT_KEYSET, in order (a set re-checked
-   * against the set it produced reports unknown_key, so never out of order).
-   * An authentic but not newer set (stale) adds nothing and is skipped, e.g.
-   * after a newer root was pinned. Any other refusal means the stored chain
-   * was altered or does not belong to this root: only the root is trusted and
-   * the next key refresh rebuilds the chain from the Admin Panel.
+   * Ruling 7: the database is not a trust anchor. The stored chain is replayed
+   * from HOTEL_ROOT_KEYSET (key-chain.ts) and only the prefix that chains is
+   * trusted; never the stored key_set. An incomplete replay is rebuilt by the
+   * key refresh that start() runs at once.
    */
   private replay(stored: SignedKeySet[]): { trusted: KeySet | null; chain: SignedKeySet[] } {
     const root = this.config.rootKeySet;
@@ -269,26 +279,19 @@ export class LicenceService implements OnApplicationShutdown {
       this.logger.error('HOTEL_ROOT_KEYSET is not set: no licence can be verified');
       return { trusted: null, chain: [] };
     }
-    let trusted = root;
-    const chain: SignedKeySet[] = [];
-    for (const set of Array.isArray(stored) ? stored : []) {
-      let reason: string;
-      try {
-        const acceptance = acceptKeySet(set, trusted);
-        if (acceptance.ok) {
-          trusted = acceptance.keySet;
-          chain.push(set);
-          continue;
-        }
-        reason = acceptance.reason;
-      } catch (err) {
-        reason = (err as Error)?.message ?? 'error';
-      }
-      if (reason === 'stale_keyset') continue;
-      this.logger.error(`Stored key chain does not replay from HOTEL_ROOT_KEYSET (${reason}); trusting the root only`);
-      return { trusted: root, chain: [] };
-    }
+    const { trusted, chain } = replayKeyChain(root, stored, this.logger);
     return { trusted, chain };
+  }
+
+  /**
+   * The held licence no longer verifies against what is trusted (unknown_key,
+   * e.g. the stored chain stopped replaying, or keys rotated): fetch the
+   * published key sets now instead of waiting for the daily refresh.
+   */
+  private async recoverTrust(): Promise<void> {
+    if (!this.held) return;
+    const { snapshot } = this.evaluate(this.now());
+    if (snapshot.state === 'INVALID' && snapshot.reason === 'unknown_key') await this.refreshKeys();
   }
 
   private auth(): { client: CentralAdminClient; auth: InstallationAuth } | null {
@@ -409,34 +412,11 @@ export class LicenceService implements OnApplicationShutdown {
     const held = this.held;
     const client = this.config.client;
     if (!held?.trusted || !client) return;
-    let trusted = held.trusted;
-    const chain = [...held.chain];
-    let progressed = false;
-    try {
-      for (let page = 0; page < MAX_KEY_PAGES; page++) {
-        const sets = await client.keySetsSince(trusted.issued_at);
-        let accepted = false;
-        let refused = false;
-        for (const set of sets) {
-          const acceptance = acceptKeySet(set, trusted);
-          if (acceptance.ok) {
-            trusted = acceptance.keySet;
-            chain.push(set);
-            accepted = true;
-          } else if (acceptance.reason !== 'stale_keyset') {
-            this.logger.warn(`Published key set refused: ${acceptance.reason}`);
-            refused = true;
-            break;
-          }
-        }
-        progressed ||= accepted;
-        if (!accepted || refused) break;
-      }
-    } catch (err) {
-      if (!(err instanceof ParentUnavailable || err instanceof ParentRefusal)) throw err;
-      this.logger.warn(`Key sets not fetched: ${err.message}`);
-    }
-    if (!progressed) return;
+    const walked = await walkKeyChain(client, held.trusted, this.logger);
+    if (walked.accepted.length === 0) return;
+    const trusted = walked.trusted;
+    // The FULL chain from the root: the store overwrites key_chain.
+    const chain = [...held.chain, ...walked.accepted];
 
     if (!(await this.store.saveKeyChain(chain, trusted))) {
       this.logger.warn('A later key set is already stored; the accepted chain is used but not written');
