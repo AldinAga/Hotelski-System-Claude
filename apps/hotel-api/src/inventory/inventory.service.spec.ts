@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { createTestDb, type TestDb } from '../../test/db';
 import { DomainError } from '../common/domain-error';
+import * as schema from '../db/schema';
 import type { Tx } from '../db/tokens';
 import { InventoryService, type Scope } from './inventory.service';
 
@@ -102,6 +104,77 @@ describe('InventoryService', () => {
         tx((x) => inv.lockDays(x, propertyId, { kind: 'unit', id: u }, '2026-11-10', '2026-11-10')),
       ).rejects.toThrow(/range/);
     });
+
+    it('a scope whose type or unit is not in the property: 404 scope_not_found, no rows inserted', async () => {
+      const missing = '00000000-0000-4000-8000-000000000000';
+      for (const kind of ['unit_type', 'unit'] as const) {
+        const err = await tx((x) => inv.lockDays(x, propertyId, { kind, id: missing }, '2026-11-10', '2026-11-11')).catch(
+          (e) => e,
+        );
+        expect(err).toBeInstanceOf(DomainError);
+        expect(err).toMatchObject({ code: 'scope_not_found', status: 404, details: { kind, id: missing } });
+      }
+      // Positive control: the same call for a scope that exists works.
+      const u = await seedUnit('A', null);
+      await tx((x) => inv.lockDays(x, propertyId, { kind: 'unit', id: u }, '2026-11-10', '2026-11-11'));
+      expect((await t.pool.query('SELECT scope_id FROM inventory_day')).rows).toEqual([{ scope_id: u }]);
+    });
+
+    it('a day inserted by a booking racing a deactivation ends with the new total (scope lock)', async () => {
+      const type = await seedType('DBL');
+      const a = await seedUnit('101', type);
+      await seedUnit('102', type);
+      await seedUnit('103', type);
+      const scope: Scope = { kind: 'unit_type', id: type };
+      const cb = await t.pool.connect();
+      const ca = await t.pool.connect();
+      let settled = false;
+      try {
+        const xb = drizzle(cb, { schema }) as unknown as Tx;
+        const xa = drizzle(ca, { schema }) as unknown as Tx;
+        const pidA = (await ca.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+        // (1) B inserts the new day (counting 3 units) and stays open.
+        await cb.query('BEGIN');
+        const booked = await inv.lockDays(xb, propertyId, scope, '2026-11-20', '2026-11-21');
+        expect(booked).toEqual([{ day: '2026-11-20', total: 3, sold: 0, blocked: 0 }]);
+
+        // (2) A deactivates a unit and recomputes, not awaited.
+        await ca.query('BEGIN');
+        const aDone = (async () => {
+          await ca.query('UPDATE unit SET active = false WHERE id = $1', [a]);
+          await inv.recomputeTotal(xa, propertyId, scope);
+          await ca.query('COMMIT');
+          return 'finished' as const;
+        })().finally(() => {
+          settled = true;
+        });
+        // Go on only once A is waiting on a lock or has finished, so the
+        // outcome does not depend on timing.
+        const aWaits = (async () => {
+          while (!settled) {
+            const r = await t.pool.query('SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted', [pidA]);
+            if (r.rowCount) return 'waiting' as const;
+            await new Promise((res) => setTimeout(res, 20));
+          }
+          return 'finished' as const;
+        })();
+        await Promise.race([aDone, aWaits]);
+
+        // (3) B commits, then A completes.
+        await cb.query('COMMIT');
+        await aDone;
+      } finally {
+        settled = true;
+        await cb.query('ROLLBACK').catch(() => undefined);
+        await ca.query('ROLLBACK').catch(() => undefined);
+        cb.release();
+        ca.release();
+      }
+
+      // (4) The day B inserted carries the total after the deactivation.
+      expect(await ledger(scope)).toEqual([{ day: '2026-11-20', total: 2, sold: 0, blocked: 0 }]);
+    });
   });
 
   describe('take', () => {
@@ -200,8 +273,14 @@ describe('InventoryService', () => {
       const type = await seedType('DBL');
       const typed = await seedUnit('101', type);
       const loose = await seedUnit('A', null);
-      expect(await tx((x) => inv.scopeOfUnit(x, typed))).toEqual({ kind: 'unit_type', id: type });
-      expect(await tx((x) => inv.scopeOfUnit(x, loose))).toEqual({ kind: 'unit', id: loose });
+      expect(await tx((x) => inv.scopeOfUnit(x, propertyId, typed))).toEqual({ kind: 'unit_type', id: type });
+      expect(await tx((x) => inv.scopeOfUnit(x, propertyId, loose))).toEqual({ kind: 'unit', id: loose });
+    });
+
+    it('a unit outside the given property is not found', async () => {
+      const u = await seedUnit('101', null);
+      const otherProperty = '00000000-0000-4000-8000-000000000000';
+      await expect(tx((x) => inv.scopeOfUnit(x, otherProperty, u))).rejects.toThrow(/not found/);
     });
   });
 });

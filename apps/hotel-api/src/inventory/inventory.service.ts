@@ -54,6 +54,18 @@ export function localDate(at: Date, timezone: string): string {
  * The inventory ledger (inventory_day), the only source of availability
  * (spec 5.7). Nothing else writes inventory_day: callers go through lockDays,
  * take and recomputeTotal, always inside their own transaction.
+ *
+ * Lock hierarchy. Every transaction takes locks in this order and never
+ * backwards, so bookings, blocks and unit changes cannot deadlock:
+ *   1. the units advisory lock (UNITS_LOCK_KEY; unit and unit-type changes
+ *      only), then the unit row (SELECT ... FOR UPDATE), when the caller
+ *      touches a unit;
+ *   2. the scope advisory locks (INVENTORY_SCOPE_LOCK_NS), several scopes in
+ *      scopeOrder: lockDays/take take them shared, recomputeTotal exclusive;
+ *   3. the inventory_day rows, in day order (FOR UPDATE ... ORDER BY day).
+ * A transaction never takes a scope shared and later exclusive (or the other
+ * way round): one role per scope per transaction. A caller that books several
+ * scopes in one transaction must call lockDays/take for them in scopeOrder.
  */
 @Injectable()
 export class InventoryService {
@@ -68,9 +80,9 @@ export class InventoryService {
     return localDate(this.clock(), rows[0].timezone);
   }
 
-  async scopeOfUnit(tx: Tx, unitId: string): Promise<Scope> {
+  async scopeOfUnit(tx: Tx, propertyId: string, unitId: string): Promise<Scope> {
     const { rows } = await tx.execute<{ unit_type_id: string | null }>(
-      sql`SELECT unit_type_id FROM unit WHERE id = ${unitId}`,
+      sql`SELECT unit_type_id FROM unit WHERE id = ${unitId} AND property_id = ${propertyId}`,
     );
     if (!rows[0]) throw new Error(`inventory: unit ${unitId} not found`);
     return scopeFor(unitId, rows[0].unit_type_id);
@@ -79,10 +91,12 @@ export class InventoryService {
   /**
    * Inserts the missing days of [from, to) with total from the currently
    * active units, then locks all of them FOR UPDATE in day order and returns
-   * them in that order.
+   * them in that order. A scope whose type or unit does not belong to the
+   * property is 404 scope_not_found.
    */
   async lockDays(tx: Tx, propertyId: string, scope: Scope, from: string, to: string): Promise<InventoryDay[]> {
     assertRange(from, to);
+    await this.assertScopeExists(tx, propertyId, scope);
     await this.lockScope(tx, scope, 'shared');
     await tx.execute(sql`
       INSERT INTO inventory_day (property_id, scope_kind, scope_id, day, total)
@@ -163,6 +177,17 @@ export class InventoryService {
       UPDATE inventory_day SET total = ${rows[0].next}
        WHERE property_id = ${propertyId} AND scope_kind = ${scope.kind} AND scope_id = ${scope.id}
          AND day >= ${today}::date`);
+  }
+
+  private async assertScopeExists(tx: Tx, propertyId: string, scope: Scope): Promise<void> {
+    const { rows } = await tx.execute(
+      scope.kind === 'unit_type'
+        ? sql`SELECT 1 FROM unit_type WHERE id = ${scope.id} AND property_id = ${propertyId}`
+        : sql`SELECT 1 FROM unit WHERE id = ${scope.id} AND property_id = ${propertyId}`,
+    );
+    if (rows.length === 0) {
+      throw new DomainError('scope_not_found', 'Tip ili jedinica ne postoji.', 404, { kind: scope.kind, id: scope.id });
+    }
   }
 
   private async lockScope(tx: Tx, scope: Scope, mode: 'shared' | 'exclusive'): Promise<void> {

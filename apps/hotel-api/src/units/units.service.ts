@@ -204,7 +204,11 @@ export class UnitsService {
             });
           }
         }
-        const [row] = await tx.update(unitType).set(patch).where(eq(unitType.id, id)).returning();
+        const [row] = await tx
+          .update(unitType)
+          .set(patch)
+          .where(and(eq(unitType.id, id), eq(unitType.propertyId, propertyId)))
+          .returning();
         const view = typeView(row);
         await this.audit.record(tx, {
           propertyId,
@@ -311,7 +315,11 @@ export class UnitsService {
         if (nextActive && !before.active) await this.assertRoomForOneMore(tx, propertyId);
         if (typeChanged || activeChanged) await this.assertNoOpenBlocks(tx, propertyId, id);
 
-        const [row] = await tx.update(unit).set(patch).where(eq(unit.id, id)).returning();
+        const [row] = await tx
+          .update(unit)
+          .set(patch)
+          .where(and(eq(unit.id, id), eq(unit.propertyId, propertyId)))
+          .returning();
 
         if (typeChanged || activeChanged) {
           const scopes: Scope[] = [scopeFor(id, before.unitTypeId)];

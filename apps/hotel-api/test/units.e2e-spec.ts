@@ -20,11 +20,12 @@ describe('units, unit types and blocks (e2e)', () => {
   let app: INestApplication;
   let manager: string;
   let receptionist: string;
+  let now = NOW;
 
   beforeAll(async () => {
     fake = await startFakeCentralAdmin();
     ta = await createTestApp({
-      clock: () => NOW,
+      clock: () => now,
       licensing: {
         client: new CentralAdminClient({ baseUrl: fake.url, allowHttp: true }),
         rootKeySet: parseRootKeySet(JSON.stringify(fake.rootKeySet)),
@@ -34,6 +35,7 @@ describe('units, unit types and blocks (e2e)', () => {
     app = ta.app;
   });
   beforeEach(async () => {
+    now = NOW;
     await ta.reset();
     await activate(20);
     manager = await sessionCookieFor(app, (await seedUser(ta.testDb, 'manager')).id);
@@ -227,6 +229,22 @@ describe('units, unit types and blocks (e2e)', () => {
       expect(res.status).toBe(409);
       expect(res.body).toMatchObject({ code: 'no_availability', details: { day: '2026-11-11' } });
       expect((await ta.testDb.pool.query('SELECT 1 FROM unit_block')).rowCount).toBe(0);
+    });
+
+    it('deleting a running block gives back only the nights from today on', async () => {
+      const u = await createUnit('Apartman', null);
+      const block = await post(`/units/${u}/blocks`, { from: '2026-11-02', to: '2026-11-05', reason: 'maintenance' });
+      expect(block.status).toBe(201);
+
+      now = new Date('2026-11-04T08:00:00Z'); // 4 Nov in Belgrade: 2 and 3 Nov are history
+      manager = await sessionCookieFor(app, (await seedUser(ta.testDb, 'manager')).id);
+      expect((await del(`/units/${u}/blocks/${block.body.id}`)).status).toBe(204);
+
+      expect((await days({ kind: 'unit', id: u }, '2026-11-02', '2026-11-05')).map((d) => [d.day, d.blocked])).toEqual([
+        ['2026-11-02', 1],
+        ['2026-11-03', 1],
+        ['2026-11-04', 0],
+      ]);
     });
 
     it('deleting a block gives the nights back and is audited', async () => {

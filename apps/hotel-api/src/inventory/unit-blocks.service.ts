@@ -91,7 +91,7 @@ export class UnitBlocksService {
           INSERT INTO unit_block (property_id, unit_id, period, reason, note, created_by)
           VALUES (${propertyId}, ${unitId}, daterange(${from}::date, ${to}::date, '[)'), ${reason}, ${note}, ${actor.id})
           RETURNING id, unit_id, lower(period)::text AS "from", upper(period)::text AS "to", reason, note`);
-        const scope = await this.inventory.scopeOfUnit(tx, unitId);
+        const scope = await this.inventory.scopeOfUnit(tx, propertyId, unitId);
         await this.inventory.take(tx, propertyId, scope, from, to, 'blocked', 1);
         const block = view(rows[0]);
         await this.audit.record(tx, {
@@ -126,12 +126,15 @@ export class UnitBlocksService {
       if (!rows[0]) throw blockNotFound();
       const block = view(rows[0]);
       // An ended block's nights may sit in a scope the unit has since left.
-      if (block.to <= (await this.inventory.today(tx, propertyId))) {
+      const today = await this.inventory.today(tx, propertyId);
+      if (block.to <= today) {
         throw new DomainError('block_ended', 'Blokada je završena i ne može se ukloniti.', 409);
       }
-      await tx.execute(sql`DELETE FROM unit_block WHERE id = ${blockId}`);
-      const scope = await this.inventory.scopeOfUnit(tx, unitId);
-      await this.inventory.take(tx, propertyId, scope, block.from, block.to, 'blocked', -1);
+      await tx.execute(sql`DELETE FROM unit_block WHERE id = ${blockId} AND property_id = ${propertyId}`);
+      const scope = await this.inventory.scopeOfUnit(tx, propertyId, unitId);
+      // Only nights from today on are given back; the ledger before today is history.
+      const releaseFrom = block.from < today ? today : block.from;
+      await this.inventory.take(tx, propertyId, scope, releaseFrom, block.to, 'blocked', -1);
       await this.audit.record(tx, {
         propertyId,
         actorUserId: actor.id,
