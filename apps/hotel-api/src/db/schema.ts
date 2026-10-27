@@ -4,6 +4,7 @@ import {
   boolean,
   char,
   customType,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -105,3 +106,41 @@ export const auditLog = pgTable('audit_log', {
   after: jsonb('after'),
   at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// See migrations/0005_units_inventory.sql.
+export type LocalizedText = { sr: string; en?: string };
+
+export const unitType = pgTable('unit_type', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  propertyId: uuid('property_id')
+    .notNull()
+    .references(() => property.id),
+  code: text('code').notNull(),
+  name: jsonb('name').$type<LocalizedText>().notNull(),
+  capacity: integer('capacity').notNull(),
+  beds: text('beds'),
+  description: jsonb('description').$type<Partial<LocalizedText>>(),
+  active: boolean('active').notNull().default(true),
+});
+
+export const CLEANLINESS = ['clean', 'dirty', 'inspected'] as const;
+
+export const unit = pgTable('unit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  propertyId: uuid('property_id')
+    .notNull()
+    .references(() => property.id),
+  name: text('name').notNull(),
+  unitTypeId: uuid('unit_type_id'),
+  address: text('address'),
+  municipality: text('municipality'),
+  eturistaObjectId: text('eturista_object_id'),
+  active: boolean('active').notNull().default(true),
+  cleanliness: text('cleanliness', { enum: CLEANLINESS }).notNull().default('clean'),
+});
+
+export const BLOCK_REASONS = ['maintenance', 'owner_use', 'other'] as const;
+export type BlockReason = (typeof BLOCK_REASONS)[number];
+
+// unit_block.period (daterange) and inventory_day are read and written with
+// raw SQL in src/inventory, so they have no Drizzle table here.

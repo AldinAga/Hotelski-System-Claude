@@ -29,6 +29,31 @@ export function requireRawString(body: Body, field: string): string {
   return value;
 }
 
+/**
+ * An optional text field: absent stays undefined, null or blank becomes null,
+ * otherwise a trimmed string of at most `max` characters.
+ */
+export function optionalText(body: Body, field: string, max = 200): string | null | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string') throw validationFailed(field);
+  const text = value.trim();
+  if (text.length > max) throw validationFailed(field);
+  return text === '' ? null : text;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A calendar date as YYYY-MM-DD that exists (no 2026-02-30). */
+export function requireDate(body: Body, field: string): string {
+  const value = body[field];
+  if (typeof value !== 'string' || !ISO_DATE.test(value)) throw validationFailed(field);
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw validationFailed(field);
+  return value;
+}
+
 export function requireOneOf<T extends string>(body: Body, field: string, allowed: readonly T[]): T {
   const value = body[field];
   if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) throw validationFailed(field);
@@ -51,8 +76,17 @@ export function isUuid(value: string): boolean {
   return UUID.test(value);
 }
 
+function hasPgCode(err: unknown, code: string): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === code || e?.cause?.code === code;
+}
+
 /** Postgres unique violation, raw or wrapped by Drizzle. */
 export function isUniqueViolation(err: unknown): boolean {
-  const e = err as { code?: string; cause?: { code?: string } } | null;
-  return e?.code === '23505' || e?.cause?.code === '23505';
+  return hasPgCode(err, '23505');
+}
+
+/** Postgres exclusion constraint violation, raw or wrapped by Drizzle. */
+export function isExclusionViolation(err: unknown): boolean {
+  return hasPgCode(err, '23P01');
 }
