@@ -294,7 +294,7 @@ export class UnitsService {
         if (typeChanged && nextTypeId) await this.assertUsableType(tx, propertyId, nextTypeId);
         if (nextActive && !before.active) await this.assertRoomForOneMore(tx, propertyId);
         if (typeChanged || activeChanged) await this.assertNoOpenBlocks(tx, propertyId, id);
-        if (typeChanged) await this.assertNoOpenStays(tx, propertyId, id);
+        if (typeChanged || (activeChanged && !nextActive)) await this.assertNoOpenStays(tx, propertyId, id);
 
         const [row] = await tx
           .update(unit)
@@ -352,9 +352,11 @@ export class UnitsService {
 
   /**
    * A stay on the unit has its nights sold in the unit's current scope and
-   * must stay on a unit of its own type (Ruling 15), so the unit cannot
-   * change type while a stay assigned to it has not ended. Call with the unit
-   * row locked: book and assignUnit lock the same row.
+   * must stay on an active unit of its own type, so the unit can neither
+   * change type (Ruling 15) nor be deactivated (Ruling 20) while a stay
+   * assigned to it has not ended: otherwise the guest would sit on an
+   * out-of-service unit and the type would count one unit too few. Call with
+   * the unit row locked: book and assignUnit lock the same row.
    */
   private async assertNoOpenStays(tx: Tx, propertyId: string, unitId: string): Promise<void> {
     const today = await this.inventory.today(tx, propertyId);

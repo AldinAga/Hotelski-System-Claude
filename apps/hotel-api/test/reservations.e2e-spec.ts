@@ -546,6 +546,27 @@ describe('reservations (e2e)', () => {
       expect((await patch(`/units/${u1}`, { unitTypeId: sgl })).status).toBe(200);
     });
 
+    it('deactivate a unit with an assigned stay: 409 unit_has_stays, nothing changed (Ruling 20)', async () => {
+      const plan = await createPlan();
+      // Spare capacity in the type, so inventory alone would let the unit go.
+      const dbl = await pricedType('DBL', 3, plan);
+      const [u1] = dbl.unitIds;
+      const a = await book([stay(plan, { unitId: u1 }, '2026-12-01', '2026-12-03')]);
+      const before = await ledger(dbl.scope);
+
+      const res = await patch(`/units/${u1}`, { active: false });
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ code: 'unit_has_stays', details: { stayId: expect.any(String) } });
+      const units = await get('/units', manager);
+      expect(units.body.find((u: { id: string }) => u.id === u1)).toMatchObject({ active: true });
+      expect(await ledger(dbl.scope)).toEqual(before);
+      expect(await audit('unit.update')).toEqual([]);
+
+      // Without the stay the unit can go out of service.
+      await post(`/reservations/${a.body.reservationId}/cancel`, { version: 1 });
+      expect((await patch(`/units/${u1}`, { active: false })).status).toBe(200);
+    });
+
     it('a stay that has ended does not hold the unit', async () => {
       const plan = await createPlan();
       const dbl = await pricedType('DBL', 2, plan);
