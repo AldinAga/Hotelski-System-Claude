@@ -98,8 +98,9 @@ describe('CentralAdminClient', () => {
   it('keySetsSince returns the sets issued after the given instant', async () => {
     const sets = await client.keySetsSince(fake.rootKeySet.payload.issued_at);
 
-    expect(sets).toHaveLength(1);
+    expect(sets).toHaveLength(2);
     expect(sets[0].payload.keys.map((k) => k.key_id)).toEqual(['root-1', 'k2']);
+    expect(sets[1].payload.keys.map((k) => k.key_id)).toEqual(['root-1', 'k2', 'k3']);
     const sent = fake.requests[fake.requests.length - 1];
     expect(sent.path).toBe(`/v1/keys?since=${encodeURIComponent(fake.rootKeySet.payload.issued_at)}`);
   });
@@ -118,6 +119,24 @@ describe('CentralAdminClient', () => {
       expect(err).toBeInstanceOf(ParentUnavailable);
     } finally {
       fake.setDown(false);
+    }
+  });
+
+  it('a redirect is not followed: the code and signed headers are never resent elsewhere', async () => {
+    const elsewhere = await startFakeCentralAdmin();
+    const before = fake.requests.length;
+    fake.setRedirect(`${elsewhere.url}/v1/installations/activate`);
+    try {
+      const activation = await caught(client.activate(elsewhere.issueCode(), newInstallationKeyPair().publicKey));
+      const beat = await caught(client.heartbeat(auth, '1.2.3'));
+
+      expect(activation).toBeInstanceOf(ParentUnavailable);
+      expect(beat).toBeInstanceOf(ParentUnavailable);
+      expect(fake.requests.length).toBe(before + 2);
+      expect(elsewhere.requests).toHaveLength(0);
+    } finally {
+      fake.setRedirect(null);
+      await elsewhere.close();
     }
   });
 

@@ -75,6 +75,9 @@ describe('ActivationService', () => {
     expect(row!.envelope.payload.revision).toBe(1);
     // The rotated set accepted from the root is what is trusted now.
     expect(row!.keySet.keys.map((k) => k.key_id)).toEqual(['root-1', 'k2']);
+    // The signed set it came from is stored, so a restart can replay it from the root.
+    expect(row!.keyChain).toHaveLength(1);
+    expect(row!.keyChain[0]).toMatchObject({ key_id: 'root-1', payload: { issued_at: row!.keySet.issued_at } });
     expect(row!.memory.highestRevision).toBe(1);
 
     const { rows } = await t.pool.query<{ private_seed_enc: string }>(
@@ -109,6 +112,24 @@ describe('ActivationService', () => {
       issued_at: fake.rootKeySet.payload.issued_at,
       keys: fake.rootKeySet.payload.keys,
     });
+    expect(row!.keyChain).toEqual([]);
+  });
+
+  it('activation key set two rotations past the root activates via the chain walk', async () => {
+    const before = fake.requests.length;
+
+    await service.activate(fake.issueCode({ keySet: 'rotated-twice' }));
+
+    const row = await store.get();
+    expect(row).not.toBeNull();
+    expect(row!.keySet.keys.map((k) => k.key_id)).toEqual(['root-1', 'k2', 'k3']);
+    expect(row!.envelope.payload.installation_id).toBe(row!.installationId);
+    // Both rotations are stored in order: signed by root-1, then by k2.
+    expect(row!.keyChain.map((s) => s.key_id)).toEqual(['root-1', 'k2']);
+    const walked = fake.requests.slice(before).filter((r) => r.path.startsWith('/v1/keys?since='));
+    expect(walked.map((r) => r.path)).toContain(
+      `/v1/keys?since=${encodeURIComponent(fake.rootKeySet.payload.issued_at)}`,
+    );
   });
 
   it('a key set that does not chain from the root: nothing is stored, 422 activation_rejected', async () => {
@@ -127,6 +148,14 @@ describe('ActivationService', () => {
 
     expect(err).toMatchObject({ code: 'activation_rejected', status: 422 });
     expect(err.details).toEqual({ reason: 'wrong_installation' });
+    expect(await store.get()).toBeNull();
+  });
+
+  it('a licence for another product (pos): 422 wrong_product, nothing is stored', async () => {
+    const err = await domainError(service.activate(fake.issueCode({ licence: { product: 'pos' } })));
+
+    expect(err).toMatchObject({ code: 'activation_rejected', status: 422 });
+    expect(err.details).toEqual({ reason: 'wrong_product' });
     expect(await store.get()).toBeNull();
   });
 
@@ -152,6 +181,8 @@ describe('ActivationService', () => {
     }
 
     expect(err).toMatchObject({ code: 'central_admin_unavailable', status: 503 });
+    // The parent may have spent the code before failing; the message must not promise otherwise.
+    expect(err.message).toMatch(/možda još važeći/);
     expect(activationRequests().length).toBe(before + 1);
     expect(await store.get()).toBeNull();
 
@@ -176,6 +207,44 @@ describe('ActivationService', () => {
     expect(err).toMatchObject({ code: 'already_activated', status: 409 });
     expect(activationRequests().length).toBe(before);
     expect((await store.get())!.installationId).toBe(first!.installationId);
+  });
+
+  it('two simultaneous activations: exactly one reaches the Admin Panel, the other is 409', async () => {
+    // Without these two, the race is not exercised: the second call would still be
+    // opening a pool connection while the first one finished its fast local HTTP call.
+    // Warm two idle connections, and hold the first activation in flight.
+    await Promise.all([t.pool.query('SELECT pg_sleep(0.05)'), t.pool.query('SELECT pg_sleep(0.05)')]);
+    fake.setLatency(300);
+    const before = activationRequests().length;
+
+    let results: PromiseSettledResult<void>[];
+    try {
+      results = await Promise.allSettled([
+        service.activate(fake.issueCode()),
+        service.activate(fake.issueCode()),
+      ]);
+    } finally {
+      fake.setLatency(0);
+    }
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(failed).toHaveLength(1);
+    expect(failed[0].reason).toMatchObject({ code: 'already_activated', status: 409 });
+    expect(activationRequests().length).toBe(before + 1);
+  });
+
+  it('an unexpected client error is rethrown as is, not reported as 503', async () => {
+    const boom = new Error('boom');
+    const broken = {
+      activate: async () => {
+        throw boom;
+      },
+    } as unknown as CentralAdminClient;
+    const svc = new ActivationService(t.db, store, new AuditService(), { ...config, client: broken });
+
+    await expect(svc.activate('ANY')).rejects.toBe(boom);
+    expect(await store.get()).toBeNull();
   });
 
   it.each([

@@ -168,6 +168,9 @@ export class CentralAdminClient {
         method,
         headers,
         body: body || undefined,
+        // A 3xx must not resend the activation code or the signed headers to
+        // another location; fetch then fails and the call is ParentUnavailable.
+        redirect: 'error',
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {

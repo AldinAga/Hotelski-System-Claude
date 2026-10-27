@@ -22,7 +22,9 @@ import {
 // Keys: the pinned root set (issued an hour ago) holds key "root-1". A rotated
 // set, signed by root-1 a minute later, retires root-1 and adds "k2", which
 // signs licences. So a licence verifies only when the installation actually
-// accepted the rotated set from the root.
+// accepted the rotated set from the root. A second rotation a minute after
+// that, signed by k2, retires k2 and adds "k3"; it is the latest published set
+// and cannot be accepted from the root directly, only by walking the chain.
 
 export interface RecordedRequest {
   method: string;
@@ -35,11 +37,13 @@ export interface RecordedRequest {
 export interface IssueCodeOptions {
   /**
    * Which key set the activation response carries and which key signs the
-   * licence: 'rotated' (default; chains from the root), 'root' (the pinned root
-   * set itself, as a fresh Admin Panel without rotations returns), 'foreign'
-   * (signed by a key the root never vouched for).
+   * licence: 'rotated' (default; chains from the root, licence by k2),
+   * 'rotated-twice' (the second rotation, licence by k3: what a real Admin
+   * Panel returns after two rotations), 'root' (the pinned root set itself, as
+   * a fresh Admin Panel without rotations returns), 'foreign' (signed by a key
+   * the root never vouched for).
    */
-  keySet?: 'rotated' | 'root' | 'foreign';
+  keySet?: KeySetChoice;
   /** Overrides on this installation's licence payload. */
   licence?: Partial<LicensePayload>;
 }
@@ -53,15 +57,21 @@ export interface FakeCentralAdmin {
   setLicence(patch: Partial<LicensePayload>): void;
   /** While down, every request is answered 503. */
   setDown(down: boolean): void;
+  /** While set, every request is answered 302 to this location; null clears it. */
+  setRedirect(location: string | null): void;
+  /** Delays every answer by this many milliseconds (0 = none), to hold calls in flight. */
+  setLatency(ms: number): void;
   requests: RecordedRequest[];
   close(): Promise<void>;
 }
+
+export type KeySetChoice = 'rotated' | 'rotated-twice' | 'root' | 'foreign';
 
 interface Installation {
   id: string;
   publicKey: string;
   revision: number;
-  signer: 'rotated' | 'root' | 'foreign';
+  signer: KeySetChoice;
   overrides: Partial<LicensePayload>;
   envelope: LicenseEnvelope;
 }
@@ -81,14 +91,17 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
   const now = Date.now();
   const t0 = new Date(now - 60 * 60_000).toISOString();
   const t1 = new Date(now - 59 * 60_000).toISOString();
+  const t2 = new Date(now - 58 * 60_000).toISOString();
   const epoch = '2020-01-01T00:00:00.000Z';
 
   const rootPair = generateSigningKeyPair();
   const k2Pair = generateSigningKeyPair();
+  const k3Pair = generateSigningKeyPair();
   const evilPair = generateSigningKeyPair();
-  const signers: Record<'root' | 'rotated' | 'foreign', Signer> = {
+  const signers: Record<KeySetChoice, Signer> = {
     root: { keyId: 'root-1', privateKeyPem: rootPair.privateKeyPem },
     rotated: { keyId: 'k2', privateKeyPem: k2Pair.privateKeyPem },
+    'rotated-twice': { keyId: 'k3', privateKeyPem: k3Pair.privateKeyPem },
     foreign: { keyId: 'evil-1', privateKeyPem: evilPair.privateKeyPem },
   };
 
@@ -111,14 +124,33 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
     { type: 'keyset', issued_at: t1, keys: [keyEntry('evil-1', evilPair.publicKey, epoch, null)] },
     signers.foreign,
   );
-  const published = [rootKeySet, rotatedKeySet];
-  const keySetFor = { root: rootKeySet, rotated: rotatedKeySet, foreign: foreignKeySet };
+  const rotatedTwiceKeySet = signKeySet(
+    {
+      type: 'keyset',
+      issued_at: t2,
+      keys: [
+        keyEntry('root-1', rootPair.publicKey, epoch, t1),
+        keyEntry('k2', k2Pair.publicKey, t1, t2),
+        keyEntry('k3', k3Pair.publicKey, t2, null),
+      ],
+    },
+    signers.rotated,
+  );
+  const published = [rootKeySet, rotatedKeySet, rotatedTwiceKeySet];
+  const keySetFor: Record<KeySetChoice, SignedKeySet> = {
+    root: rootKeySet,
+    rotated: rotatedKeySet,
+    'rotated-twice': rotatedTwiceKeySet,
+    foreign: foreignKeySet,
+  };
 
   const codes = new Map<string, Code>();
   const installations = new Map<string, Installation>();
   const requests: RecordedRequest[] = [];
   let globalPatch: Partial<LicensePayload> = {};
   let down = false;
+  let redirectTo: string | null = null;
+  let latencyMs = 0;
 
   function issue(inst: Omit<Installation, 'envelope'>): LicenseEnvelope {
     const issued = Date.now();
@@ -180,6 +212,7 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
 
   function handle(rec: RecordedRequest, res: ServerResponse): void {
     if (down) return send(res, 503, { code: 'unavailable', message: 'down' });
+    if (redirectTo !== null) return send(res, 302, undefined, { location: redirectTo });
     const url = new URL(rec.path, 'http://fake');
 
     if (rec.method === 'POST' && url.pathname === '/v1/installations/activate') {
@@ -251,11 +284,15 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
         body: Buffer.concat(chunks).toString('utf8'),
       };
       requests.push(rec);
-      try {
-        handle(rec, res);
-      } catch (err) {
-        send(res, 500, { code: 'internal', message: (err as Error).message });
-      }
+      const answer = () => {
+        try {
+          handle(rec, res);
+        } catch (err) {
+          send(res, 500, { code: 'internal', message: (err as Error).message });
+        }
+      };
+      if (latencyMs > 0) setTimeout(answer, latencyMs);
+      else answer();
     });
   });
 
@@ -279,6 +316,12 @@ export async function startFakeCentralAdmin(): Promise<FakeCentralAdmin> {
     },
     setDown(value: boolean): void {
       down = value;
+    },
+    setRedirect(location: string | null): void {
+      redirectTo = location;
+    },
+    setLatency(ms: number): void {
+      latencyMs = ms;
     },
     requests,
     close(): Promise<void> {

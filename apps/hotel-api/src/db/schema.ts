@@ -38,6 +38,7 @@ export const installationLicence = pgTable('installation_licence', {
   privateSeedEnc: text('private_seed_enc').notNull(),
   envelope: jsonb('envelope').notNull(),
   keySet: jsonb('key_set').notNull(),
+  keyChain: jsonb('key_chain').notNull().default([]),
   memory: jsonb('memory').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
