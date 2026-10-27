@@ -5,6 +5,8 @@ import * as schema from '../src/db/schema';
 
 export interface TestDb {
   pool: Pool;
+  /** Connection string of this worker's database, for specs that need a bigger pool of their own. */
+  connectionString: string;
   db: NodePgDatabase<typeof schema>;
   truncate(): Promise<void>;
   close(): Promise<void>;
@@ -50,11 +52,13 @@ export async function createScratchPool(name: string): Promise<Pool> {
 export async function createTestDb(): Promise<TestDb> {
   const name = `hotel_test_${process.env.JEST_WORKER_ID ?? '1'}`;
   await ensureDatabase(name);
-  const pool = new Pool({ connectionString: urlFor(name) });
+  const connectionString = urlFor(name);
+  const pool = new Pool({ connectionString });
   await migrate(pool);
   const db = drizzle(pool, { schema });
   return {
     pool,
+    connectionString,
     db,
     async truncate() {
       const { rows } = await pool.query<{ tablename: string }>(
