@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { SetupService } from '../src/auth/setup.service';
 import { CentralAdminClient } from '../src/licensing/central-admin.client';
@@ -96,6 +97,28 @@ describe('scripts/smoke-1a.mjs (e2e)', () => {
     expect(await q(`SELECT status FROM reservation`)).toEqual([{ status: 'cancelled' }]);
     // Cancelling gave the nights back.
     expect(await q(`SELECT coalesce(sum(sold), 0)::int AS sold FROM inventory_day`)).toEqual([{ sold: 0 }]);
+  });
+
+  it('--totp-out narrows a file that already exists to mode 600', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'smoke-totp-'));
+    const file = join(dir, 'owner-totp.txt');
+    try {
+      writeFileSync(file, 'old\n', { mode: 0o644 });
+      chmodSync(file, 0o644);
+      expect(statSync(file).mode & 0o777).toBe(0o644);
+
+      const setupToken = (await ta.app.get(SetupService).prepareOnBoot())!;
+      const code = fake.issueCode({ licence: { limits: { rooms: 20, users: 10 } } });
+      const out = await node(SMOKE, [...args(setupToken, code), '--totp-out', file], {
+        HOTEL_SMOKE_PASSWORD: 'smoke-lozinka-1a',
+      });
+
+      expect(out.code).toBe(0);
+      expect(readFileSync(file, 'utf8')).toMatch(/^otpauth:\/\/totp\//);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('a step that fails stops the run with FAIL and exit 1', async () => {

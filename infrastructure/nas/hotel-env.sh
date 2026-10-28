@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs ON THE NAS (deploy.sh pipes it to `ssh ... bash -s`). Completes
+# Runs ON THE NAS (deploy.sh runs the copy from the deployed ref,
+# /volume1/ci/hotel/deploy/infrastructure/nas/hotel-env.sh). Completes
 # /volume1/ci/hotel/hotel.env for hotel-api, add-only:
 #
 #   HOTEL_SECRET_KEY   32 random bytes, base64url; made once, never changed
@@ -9,7 +10,8 @@
 #   DATABASE_URL       postgres://<user>:<password>@hotel-postgres-claude:5432/<db>,
 #                      built from the HOTEL_POSTGRES_* lines already in the file
 #
-# A key that is already present is never rewritten. No value is ever printed:
+# A key that is already present is never rewritten; a key whose line has an
+# empty value stops the script (see has/blank below). No value is ever printed:
 # the script reports key names only. The file stays mode 600.
 set -euo pipefail
 umask 077
@@ -26,8 +28,21 @@ fi
 # existing value (and change a password); end the file with one first.
 if [ -s "$F" ] && [ -n "$(tail -c1 "$F")" ]; then printf '\n' >> "$F"; fi
 
-has() { grep -q "^$1=" "$F"; }
+# A key counts as present only with a non-blank value. A line that names the key
+# but has no value (`KEY=` or `KEY=   `) is neither kept nor rewritten: a second
+# `KEY=` line would leave two definitions whose winner depends on the reader,
+# and editing the file in place is exactly what this script never does. So it
+# stops and names the key (never a value); a person removes that line by hand.
+has() { grep -q "^$1=[^[:space:]]" "$F"; }
+blank() { grep -q "^$1=[[:space:]]*$" "$F"; }
 val() { grep -m1 "^$1=" "$F" | cut -d= -f2-; }
+
+for k in HOTEL_SECRET_KEY HOTEL_ROOT_KEYSET DATABASE_URL; do
+  if ! has "$k" && blank "$k"; then
+    echo "   $k is in $F with an empty value; remove that line by hand and deploy again" >&2
+    exit 1
+  fi
+done
 
 if has HOTEL_SECRET_KEY; then
   echo "   HOTEL_SECRET_KEY present, kept"

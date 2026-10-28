@@ -63,12 +63,18 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
 ### Pokretanje i ažuriranje `claude-hotel`
 
 - **Deploy (staging faze 1a):** `bash infrastructure/nas/deploy.sh [ref]` (podrazumevano `HEAD`).
-  Prvo `ci.sh <ref>` (crveno prekida), zatim `git archive <ref>` u `/volume1/ci/hotel/deploy`
+  `ref` se jednom razrešava u pun SHA i isti SHA ide u `ci.sh`, `git archive` i oznaku slike.
+  Prvo `ci.sh <sha>` (crveno prekida), zatim `git archive <sha>` u `/volume1/ci/hotel/deploy`
   (nikad radno stablo, nikad `src`), install i build u `hotel-ci-runner-claude` (web sa
-  `HOTEL_API_URL=http://hotel-api-claude:4200`), dopuna `hotel.env` (`hotel-env.sh`, samo dodaje),
-  slika `hotel-claude:<sha>` + `hotel-claude:staging`, `up -d --remove-orphans --wait` za
-  `claude-hotel` (odbija ako bi ponovo napravio bazu ili Redis) i čišćenje: ostaju 3 najnovije
+  `HOTEL_API_URL=http://hotel-api-claude:4200`), dopuna `hotel.env` (`hotel-env.sh` iz tog ref-a,
+  samo dodaje), slika `hotel-claude:<sha>`, provera da se baze i Redis ne bi ponovo napravili,
+  pa tek onda oznaka `hotel-claude:staging`. Baze i Redis se samo pokreću ako nedostaju
+  (`up -d --no-recreate --wait postgres hub-postgres redis`, nikad se ne prave ponovo), a `api` i
+  `web` idu sa `up -d --no-deps --remove-orphans --wait api web`. Čišćenje: ostaju 3 najnovije
   `hotel-claude:<sha>` oznake. Ne dira ništa van `claude-hotel`, `hotel-claude` i `/volume1/ci/hotel/deploy`.
+- **Neuspelo pokretanje API-ja:** `hotel-api-claude` se ne gasi (nema crash-loop-a ni mejlova). Greška
+  (bez tajni) je u `docker logs hotel-api-claude`, a do popravke i restarta kontejner je `Up (unhealthy)`
+  i `/health` vraća 503.
 - **Staging adrese:** API `http://192.168.1.199:4200` (`/health`), recepcija `http://192.168.1.199:4201`.
   Kod za prvo podešavanje: `docker logs hotel-api-claude 2>&1 | grep "Kod za prvo podešavanje"`.
   Smoke na svežoj instalaciji: `node scripts/smoke-1a.mjs --api http://192.168.1.199:4200 --setup-token … --code …`.
@@ -81,8 +87,9 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
   i posle se ne menja, jer baze već imaju podatke sa tim lozinkama. Lozinke se ne ispisuju i ne kopiraju
   u repo. `deploy.sh` mu samo dodaje `HOTEL_SECRET_KEY`, `HOTEL_ROOT_KEYSET` i `DATABASE_URL` kad
   nedostaju; postojeće vrednosti ne menja. Proverava se samo po imenima ključeva (`cut -d= -f1`).
-- Pokretanje: `/usr/local/bin/docker compose -f /volume1/ci/hotel/src/infrastructure/docker/docker-compose.yml
-  --env-file /volume1/ci/hotel/hotel.env up -d --wait`.
+- Ručno pokretanje baza i Redisa (samo ta tri servisa; `api` i `web` podiže isključivo `deploy.sh`):
+  `/usr/local/bin/docker compose -f /volume1/ci/hotel/src/infrastructure/docker/docker-compose.yml
+  --env-file /volume1/ci/hotel/hotel.env up -d --no-recreate --wait postgres hub-postgres redis`.
 - Redis nema lozinku; dostupan je samo na `127.0.0.1` NAS-a i u mreži `hotel-network-claude`.
 - Provera lozinke radi se preko Docker mreže (iz drugog kontejnera). Unutar Postgres kontejnera
   `127.0.0.1` prolazi bez lozinke, pa test tu ne dokazuje ništa.

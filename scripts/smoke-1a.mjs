@@ -16,7 +16,7 @@
 // Prints one "OK <step>" line per step; on the first failure prints
 // "FAIL <step>: ..." and exits 1. Exit 0 only when every step passed.
 import { createHmac } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
@@ -152,7 +152,11 @@ const secret = await step('owner created (TOTP from totpUri)', async () => {
   check(typeof body?.totpUri === 'string', 'no totpUri in the answer');
   const s = new URL(body.totpUri).searchParams.get('secret');
   check(s && /^[A-Z2-7]+$/.test(s), 'totpUri has no base32 secret');
-  if (totpOut) writeFileSync(totpOut, `${body.totpUri}\n`, { mode: 0o600 });
+  if (totpOut) {
+    // `mode` applies only when the file is created; chmod also narrows an existing file.
+    writeFileSync(totpOut, `${body.totpUri}\n`, { mode: 0o600 });
+    chmodSync(totpOut, 0o600);
+  }
   return s;
 });
 
