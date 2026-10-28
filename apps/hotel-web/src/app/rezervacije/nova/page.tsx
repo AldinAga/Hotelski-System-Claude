@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, navigation, send } from '@/lib/api';
-import { addDays, formatDay, formatRsd, isDay, nightsBetween, today } from '@/lib/format';
+import { addDays, formatDay, formatRsd, isDay, nightsBetween, nightsLabel, today } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
 import { typeLabel, type Quote, type RatePlan, type Unit, type UnitType } from '@/lib/types';
 import { useReadOnly } from '@/lib/use-read-only';
@@ -15,13 +15,6 @@ interface Options {
 
 /** "type:<id>" or "unit:<id>": what the stay is booked on. */
 type Target = string;
-
-function nightsLabel(n: number): string {
-  const ten = n % 10;
-  const hundred = n % 100;
-  if (ten === 1 && hundred !== 11) return `${n} noć`;
-  return `${n} noći`;
-}
 
 export default function NewReservationPage() {
   const readOnly = useReadOnly();

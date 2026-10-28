@@ -436,3 +436,8 @@ table.nights td {
 table.nights td.num {
   text-align: right;
 }
+
+.topnav .nav-disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}

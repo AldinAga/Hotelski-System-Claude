@@ -44,6 +44,11 @@ export function nightsBetween(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
 }
 
+/** 1 noć, 21 noć, 2 noći, 11 noći. */
+export function nightsLabel(n: number): string {
+  return n % 10 === 1 && n % 100 !== 11 ? `${n} noć` : `${n} noći`;
+}
+
 export function isDay(value: string): boolean {
   const m = ISO_DAY.exec(value);
   if (!m) return false;

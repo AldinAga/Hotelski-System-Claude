@@ -39,9 +39,9 @@ export interface UnitBlock {
 }
 
 /**
- * GET /calendar bars are clipped by the API to the requested range: a stay
- * that began earlier arrives as the first day, so the real dates are on the
- * reservation page.
+ * GET /calendar bars carry their real dates: a stay or block may start
+ * before the first requested day or end after the last. The grid clips them
+ * for drawing (spanOf in components/calendar-grid.tsx).
  */
 export type CalendarBar =
   | {
@@ -64,6 +64,8 @@ export interface UnassignedStay {
   unitTypeId: string;
   arrival: string;
   departure: string;
+  /** The reservation's version when the calendar was read: sent with assign-unit. */
+  version: number;
 }
 
 export interface CalendarView {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, send } from '@/lib/api';
-import { formatDate, formatDay, formatRsd, nightsBetween } from '@/lib/format';
+import { formatDate, formatDay, formatRsd, nightsBetween, nightsLabel } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
 import {
   RESERVATION_STATUS_LABELS,
@@ -106,7 +106,7 @@ export function ReservationDetail({ id }: { id: string }) {
                   </div>
                   <div className="muted">
                     {[
-                      `${nightsBetween(s.arrival, s.departure)} noći`,
+                      nightsLabel(nightsBetween(s.arrival, s.departure)),
                       type ? typeLabel(type) : null,
                       unit ? unit.name : 'Jedinica nije dodeljena',
                       `${s.adults} odr.${s.children ? ` + ${s.children} dece` : ''}`,

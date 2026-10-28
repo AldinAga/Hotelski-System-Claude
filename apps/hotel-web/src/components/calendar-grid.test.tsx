@@ -50,6 +50,7 @@ function view(over: Partial<CalendarView> = {}): CalendarView {
         unitTypeId: DBL,
         arrival: '2026-11-07',
         departure: '2026-11-09',
+        version: 4,
       },
     ],
     ...over,
@@ -118,7 +119,7 @@ describe('CalendarGrid', () => {
     expect(late).toHaveClass('cont-after');
   });
 
-  it('a stay the API already clipped to the first day is drawn as possibly continuing', () => {
+  it('a stay arriving on the first shown day has no "continues" edge', () => {
     setup({
       units: [
         {
@@ -141,7 +142,35 @@ describe('CalendarGrid', () => {
         },
       ],
     });
-    expect(screen.getByRole('link', { name: /R-2026-000001/ })).toHaveClass('cont-before');
+    const bar = screen.getByRole('link', { name: /R-2026-000001/ });
+    expect(bar.style.gridColumn).toBe('2 / span 2');
+    expect(bar).not.toHaveClass('cont-before');
+    expect(bar).not.toHaveClass('cont-after');
+    expect(bar).not.toHaveAttribute('title');
+  });
+
+  it('the unassigned list shows the real dates, also of a stay reaching beyond the range', () => {
+    setup({
+      unassigned: [
+        {
+          stayId: 's9',
+          reservationId: 'r9',
+          number: 'R-2026-000009',
+          guest: 'Ana Anić',
+          unitTypeId: DBL,
+          arrival: '2026-10-30',
+          departure: '2026-11-20',
+          version: 4,
+        },
+      ],
+    });
+    const item = screen.getByRole('listitem', { name: /R-2026-000009/ });
+    expect(item).toHaveTextContent('30.10.2026 – 20.11.2026');
+    // The bar is still clipped to the shown days, with both edges marked.
+    const bar = screen.getByRole('link', { name: /R-2026-000009/ });
+    expect(bar.style.gridColumn).toBe('2 / span 14');
+    expect(bar).toHaveClass('cont-before');
+    expect(bar).toHaveClass('cont-after');
   });
 
   it('a click on an empty day of a unit asks for a new reservation on that unit and day', async () => {
@@ -170,7 +199,7 @@ describe('CalendarGrid', () => {
     fireEvent.dragStart(bar);
     fireEvent.dragOver(screen.getByRole('row', { name: 'Soba 102' }));
     fireEvent.drop(screen.getByRole('row', { name: 'Soba 102' }));
-    expect(onAssign).toHaveBeenCalledWith('s9', 'r9', U102);
+    expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ stayId: 's9', reservationId: 'r9', version: 4 }), U102);
   });
 
   it('without dragging: a select on the unassigned stay offers only units of its type', async () => {
@@ -185,7 +214,7 @@ describe('CalendarGrid', () => {
     ]);
     await user.selectOptions(select, U102);
     await user.click(within(item).getByRole('button', { name: 'Dodeli' }));
-    expect(onAssign).toHaveBeenCalledWith('s9', 'r9', U102);
+    expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ stayId: 's9', reservationId: 'r9', version: 4 }), U102);
   });
 
   it('read only (safe mode): no drag, no assign, no new reservation from a cell; bars still shown', () => {

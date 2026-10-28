@@ -8,6 +8,10 @@ import type { Scope } from '../inventory/inventory.service';
 /** The most days one calendar request may cover. */
 export const CALENDAR_MAX_DAYS = 62;
 
+/**
+ * A bar overlapping the range, with its real dates: arrival/departure and
+ * from/to are not clipped to the range (the client clips for drawing).
+ */
 export type CalendarBar =
   | {
       kind: 'stay';
@@ -33,6 +37,8 @@ export interface CalendarView {
     unitTypeId: string;
     arrival: string;
     departure: string;
+    /** The reservation's version, for POST /stays/:id/assign-unit (optimistic check). */
+    version: number;
   }>;
 }
 
@@ -67,6 +73,7 @@ interface BarRow {
   to_day: string;
   status: string | null;
   reason: string | null;
+  version: number | null;
   [column: string]: unknown;
 }
 
@@ -115,7 +122,7 @@ export class CalendarService {
         const bars = await tx.execute<BarRow>(sql`
           SELECT 'stay' AS kind, s.id, s.reservation_id, r.number,
                  g.first_name || ' ' || g.last_name AS guest, s.unit_id, s.unit_type_id,
-                 s.arrival::text AS from_day, s.departure::text AS to_day, s.status, NULL::text AS reason
+                 s.arrival::text AS from_day, s.departure::text AS to_day, s.status, NULL::text AS reason, r.version
             FROM stay s
             JOIN reservation r ON r.property_id = s.property_id AND r.id = s.reservation_id
             JOIN guest g ON g.property_id = r.property_id AND g.id = r.holder_guest_id
@@ -123,7 +130,7 @@ export class CalendarService {
              AND s.arrival < ${to}::date AND s.departure > ${from}::date
           UNION ALL
           SELECT 'block', b.id, NULL::uuid, NULL::text, NULL::text, b.unit_id, NULL::uuid,
-                 lower(b.period)::text, upper(b.period)::text, NULL::text, b.reason
+                 lower(b.period)::text, upper(b.period)::text, NULL::text, b.reason, NULL::int
             FROM unit_block b
            WHERE b.property_id = ${propertyId} AND b.period && daterange(${from}::date, ${to}::date)
           ORDER BY from_day, id`);
@@ -154,12 +161,13 @@ export class CalendarService {
       }))
       .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : a.scope.id < b.scope.id ? -1 : 1));
 
-    // Bars, clipped to [from, to).
-    const clip = (a: string, b: string) => ({ from: a < from ? from : a, to: b > to ? to : b });
+    // Bars keep their real dates (not clipped to [from, to)): a bar may start
+    // before the first day or end after the last, and the client clips it for
+    // drawing. That is how the screen knows a stay goes on beyond the range.
     const barsByUnit = new Map<string, CalendarBar[]>();
     const unassigned: CalendarView['unassigned'] = [];
     for (const r of barRows) {
-      const span = clip(r.from_day, r.to_day);
+      const span = { from: r.from_day, to: r.to_day };
       if (r.kind === 'block') {
         push(barsByUnit, r.unit_id as string, {
           kind: 'block',
@@ -179,7 +187,7 @@ export class CalendarService {
         departure: span.to,
       };
       if (r.unit_id) push(barsByUnit, r.unit_id, { kind: 'stay', ...common, status: r.status as string });
-      else unassigned.push({ ...common, unitTypeId: r.unit_type_id as string });
+      else unassigned.push({ ...common, unitTypeId: r.unit_type_id as string, version: r.version as number });
     }
 
     return {

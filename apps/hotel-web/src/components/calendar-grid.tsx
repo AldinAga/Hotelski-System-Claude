@@ -11,7 +11,7 @@ export interface CalendarGridProps {
   /** A click on a free day of a unit: start a new reservation there. */
   onPickCell: (unitId: string, day: string) => void;
   /** An unassigned stay put on a unit of its type (by drag or by the select). */
-  onAssign: (stayId: string, reservationId: string, unitId: string) => void;
+  onAssign: (stay: UnassignedStay, unitId: string) => void;
 }
 
 const WEEKDAYS = ['ned', 'pon', 'uto', 'sre', 'čet', 'pet', 'sub'];
@@ -21,17 +21,16 @@ interface Span {
   /** Grid column of the first night (column 1 holds the row label). */
   column: number;
   nights: number;
-  /** The stay or block may begin before the first shown day. */
+  /** The stay or block began before the first shown day. */
   before: boolean;
   /** It goes on after the last shown day. */
   after: boolean;
 }
 
 /**
- * Where [from, to) falls in the shown days, clipped to them. The API already
- * clips bars to the range, so a bar starting on the first day may have begun
- * earlier: it is drawn with a "continues" edge, and the reservation page has
- * the real dates.
+ * Where [from, to) falls in the shown days, clipped to them. GET /calendar
+ * sends the real dates, so a bar that began earlier (or ends later) is drawn
+ * from the first (to the last) column with a "continues" edge.
  */
 export function spanOf(days: string[], from: string, to: string): Span | null {
   if (days.length === 0) return null;
@@ -41,7 +40,7 @@ export function spanOf(days: string[], from: string, to: string): Span | null {
   const stop = to > end ? end : to;
   const nights = nightsBetween(start, stop);
   if (nights <= 0) return null;
-  return { column: nightsBetween(first, start) + 2, nights, before: from <= first, after: to >= end };
+  return { column: nightsBetween(first, start) + 2, nights, before: from < first, after: to > end };
 }
 
 function place(span: Span, row = 1): CSSProperties {
@@ -155,7 +154,7 @@ export function CalendarGrid({ view, readOnly, onPickCell, onAssign }: CalendarG
                 setDropOn(null);
                 if (!ok || !stay) return;
                 e.preventDefault();
-                onAssign(stay.stayId, stay.reservationId, u.id);
+                onAssign(stay, u.id);
               }}
             >
               <div className="cal-label" role="rowheader" style={{ gridRow: 1, gridColumn: 1 }}>
@@ -273,7 +272,7 @@ function UnassignedItem(props: {
         <button
           type="button"
           disabled={props.readOnly || unitId === ''}
-          onClick={() => props.onAssign(stay.stayId, stay.reservationId, unitId)}
+          onClick={() => props.onAssign(stay, unitId)}
         >
           Dodeli
         </button>

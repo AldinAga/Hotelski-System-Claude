@@ -120,7 +120,7 @@ describe('front-desk calendar (e2e)', () => {
 
   const calendar = (from: string, to: string, cookie = receptionist) => get(`/calendar?from=${from}&to=${to}`, cookie);
 
-  it('a stay across the range boundary is shown clipped to the range', async () => {
+  it('a stay across the range boundary is in the range with its real dates (not clipped)', async () => {
     const plan = await createPlan();
     const dbl = await pricedType('DBL', 2, plan);
     const r = await book(plan, { unitId: dbl.unitIds[0] }, '2026-11-10', '2026-11-20');
@@ -135,39 +135,49 @@ describe('front-desk calendar (e2e)', () => {
         reservationId: r.reservationId,
         number: r.number,
         guest: 'Petar Petrović',
-        arrival: '2026-11-12',
-        departure: '2026-11-15',
+        arrival: '2026-11-10',
+        departure: '2026-11-20',
         status: 'expected',
       }),
     ]);
     expect(row.bars[0].stayId).toEqual(expect.any(String));
-    // Both ends outside the range: still one bar, the whole range.
-    const wide = await calendar('2026-11-11', '2026-11-13');
-    expect(wide.body.units.find((u: { id: string }) => u.id === dbl.unitIds[0]).bars[0]).toEqual(
-      expect.objectContaining({ arrival: '2026-11-11', departure: '2026-11-13' }),
-    );
+    // A stay arriving on the first day of the range says so (the screen draws no "continues" edge).
+    const r2 = await book(plan, { unitId: dbl.unitIds[1] }, '2026-11-12', '2026-11-14');
+    const again = await calendar('2026-11-12', '2026-11-15');
+    expect(again.body.units.find((u: { id: string }) => u.id === dbl.unitIds[1]).bars).toEqual([
+      expect.objectContaining({ reservationId: r2.reservationId, arrival: '2026-11-12', departure: '2026-11-14' }),
+    ]);
     // A stay that ends the day the range starts is not in it (departure is exclusive).
     const after = await calendar('2026-11-20', '2026-11-22');
     expect(after.body.units.find((u: { id: string }) => u.id === dbl.unitIds[0]).bars).toEqual([]);
   });
 
-  it('an unassigned stay is in unassigned, not in units', async () => {
+  it('an unassigned stay is in unassigned, not in units, with its real dates and the reservation version', async () => {
     const plan = await createPlan();
     const dbl = await pricedType('DBL', 2, plan);
-    const r = await book(plan, { unitTypeId: dbl.typeId }, '2026-11-10', '2026-11-12');
+    const r = await book(plan, { unitTypeId: dbl.typeId }, '2026-11-10', '2026-11-20');
 
-    const res = await calendar('2026-11-08', '2026-11-15');
+    const res = await calendar('2026-11-12', '2026-11-15');
     expect(res.body.unassigned).toEqual([
-      expect.objectContaining({
+      {
+        stayId: expect.any(String),
         reservationId: r.reservationId,
         number: r.number,
         guest: 'Petar Petrović',
         unitTypeId: dbl.typeId,
         arrival: '2026-11-10',
-        departure: '2026-11-12',
-      }),
+        departure: '2026-11-20',
+        version: 1,
+      },
     ]);
     for (const u of res.body.units) expect(u.bars).toEqual([]);
+
+    // The version follows the reservation: a stale screen posts an old one and gets version_conflict.
+    const stay = res.body.unassigned[0];
+    expect((await post(`/stays/${stay.stayId}/assign-unit`, { unitId: dbl.unitIds[1], version: stay.version }, receptionist)).status).toBe(200);
+    const stale = await post(`/stays/${stay.stayId}/assign-unit`, { unitId: dbl.unitIds[0], version: stay.version }, receptionist);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('version_conflict');
   });
 
   it('free for a day without an inventory_day row is the number of active units of the type', async () => {
@@ -210,7 +220,7 @@ describe('front-desk calendar (e2e)', () => {
     expect(typed.free).toEqual([3, 2, 0, 2, 3]);
   });
 
-  it('a block shows as a bar clipped to the range; a cancelled stay is not shown', async () => {
+  it('a block shows as a bar with its real dates; a cancelled stay is not shown', async () => {
     const plan = await createPlan();
     const dbl = await pricedType('DBL', 2, plan);
     const blk = await post(`/units/${dbl.unitIds[0]}/blocks`, { from: '2026-11-05', to: '2026-11-12', reason: 'owner_use' });
@@ -221,7 +231,7 @@ describe('front-desk calendar (e2e)', () => {
     const res = await calendar('2026-11-08', '2026-11-11');
     const blocked = res.body.units.find((u: { id: string }) => u.id === dbl.unitIds[0]);
     expect(blocked.bars).toEqual([
-      { kind: 'block', blockId: blk.body.id, from: '2026-11-08', to: '2026-11-11', reason: 'owner_use' },
+      { kind: 'block', blockId: blk.body.id, from: '2026-11-05', to: '2026-11-12', reason: 'owner_use' },
     ]);
     const other = res.body.units.find((u: { id: string }) => u.id === dbl.unitIds[1]);
     expect(other.bars).toEqual([]);

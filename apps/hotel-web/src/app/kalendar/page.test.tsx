@@ -50,6 +50,7 @@ function calendar(from: string, n: number) {
         unitTypeId: DBL,
         arrival: '2026-11-07',
         departure: '2026-11-09',
+        version: 3,
       },
     ],
   };
@@ -117,12 +118,9 @@ describe('/kalendar', () => {
     );
   });
 
-  it('assigning an unassigned stay reads its version, posts assign-unit and reloads the calendar', async () => {
+  it('assigning posts the version the calendar showed (no fresh read), then reloads the calendar', async () => {
     const calls = mockFetch(
-      routes('VALID', {
-        [`GET /api/reservations/${RES}`]: { body: { id: RES, version: 3, stays: [] } },
-        [`POST /api/stays/${STAY}/assign-unit`]: { body: { stayId: STAY, unitId: U102, version: 4 } },
-      }),
+      routes('VALID', { [`POST /api/stays/${STAY}/assign-unit`]: { body: { stayId: STAY, unitId: U102, version: 4 } } }),
     );
     const user = userEvent.setup();
     render(<CalendarPage />);
@@ -130,28 +128,75 @@ describe('/kalendar', () => {
     await user.selectOptions(within(item).getByLabelText('Jedinica'), U102);
     await user.click(within(item).getByRole('button', { name: 'Dodeli' }));
 
-    await vi.waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true));
-    expect(calls.find((c) => c.method === 'POST')).toEqual({
-      method: 'POST',
-      url: `/api/stays/${STAY}/assign-unit`,
-      body: { unitId: U102, version: 3 },
-    });
     expect(await screen.findByRole('status')).toHaveTextContent('Boravak je dodeljen jedinici Soba 102.');
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([
+      { method: 'POST', url: `/api/stays/${STAY}/assign-unit`, body: { unitId: U102, version: 3 } },
+    ]);
+    expect(calls.some((c) => c.url.startsWith('/api/reservations'))).toBe(false);
     expect(calls.filter((c) => c.url.startsWith('/api/calendar'))).toHaveLength(2);
   });
 
-  it('a refused assign shows the dictionary message', async () => {
-    mockFetch(
+  it('a stale calendar (a colleague already assigned the stay) is refused: message, reload, the stay is not moved', async () => {
+    let assigned = false;
+    const calls = mockFetch(
       routes('VALID', {
-        [`GET /api/reservations/${RES}`]: { body: { id: RES, version: 3, stays: [] } },
-        [`POST /api/stays/${STAY}/assign-unit`]: apiError(409, 'unit_taken'),
+        // The server's current version is 4: a fresh read would get it and move the stay silently.
+        [`GET /api/reservations/${RES}`]: { body: { id: RES, version: 4, stays: [] } },
+        [`POST /api/stays/${STAY}/assign-unit`]: (c: Call) =>
+          (c.body as { version: number }).version === 4
+            ? { body: { stayId: STAY, unitId: U102, version: 5 } }
+            : apiError(409, 'version_conflict', 'x', { version: 4 }),
+        'GET /api/calendar': (c: Call) => {
+          const q = new URLSearchParams(c.url.split('?')[1]);
+          const v = calendar(q.get('from')!, 14);
+          // After the reload the stay shows where the colleague put it.
+          return { body: assigned ? { ...v, unassigned: [] } : v };
+        },
       }),
     );
+    const user = userEvent.setup();
+    render(<CalendarPage />);
+    const item = await screen.findByRole('listitem', { name: /R-2026-000009/ });
+    assigned = true;
+    await user.selectOptions(within(item).getByLabelText('Jedinica'), U102);
+    await user.click(within(item).getByRole('button', { name: 'Dodeli' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Rezervacija je promenjena u međuvremenu. Kalendar je osvežen; proverite i pokušajte ponovo.',
+    );
+    await vi.waitFor(() => expect(screen.queryByRole('listitem', { name: /R-2026-000009/ })).toBeNull());
+    expect(calls.filter((c) => c.url.startsWith('/api/calendar'))).toHaveLength(2);
+    // Only the calendar's (stale) version was ever sent, and it was refused.
+    expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([{ unitId: U102, version: 3 }]);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('a refused assign shows the dictionary message', async () => {
+    mockFetch(routes('VALID', { [`POST /api/stays/${STAY}/assign-unit`]: apiError(409, 'unit_taken') }));
     const user = userEvent.setup();
     render(<CalendarPage />);
     const item = await screen.findByRole('listitem', { name: /R-2026-000009/ });
     await user.selectOptions(within(item).getByLabelText('Jedinica'), U102);
     await user.click(within(item).getByRole('button', { name: 'Dodeli' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Jedinica je već zauzeta u tom periodu.');
+  });
+
+  it('a failed load is cleared by the next successful one', async () => {
+    let fail = true;
+    mockFetch(
+      routes('VALID', {
+        'GET /api/calendar': (c: Call) => {
+          if (fail) return { status: 503, body: { code: 'network_error', message: '', details: null } };
+          const q = new URLSearchParams(c.url.split('?')[1]);
+          return { body: calendar(q.get('from')!, 31) };
+        },
+      }),
+    );
+    render(<CalendarPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server nije dostupan.');
+    fail = false;
+    fireEvent.change(screen.getByLabelText('Prikaz'), { target: { value: '31' } });
+    expect(await screen.findByRole('link', { name: /R-2026-000001/ })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

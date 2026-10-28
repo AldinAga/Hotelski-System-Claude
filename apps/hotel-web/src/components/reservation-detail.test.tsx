@@ -89,6 +89,18 @@ describe('ReservationDetail', () => {
     );
   });
 
+  it('a one-night stay reads "1 noć", a longer one "6 noći"', async () => {
+    const oneNight = { ...RESERVATION.stays[0], id: 's2', arrival: '2026-11-10', departure: '2026-11-11', totalMinor: 1_000_000 };
+    mockFetch(
+      routes('VALID', { [`GET /api/reservations/${RES}`]: { body: { ...RESERVATION, stays: [RESERVATION.stays[0], oneNight] } } }),
+    );
+    render(<ReservationDetail id={RES} />);
+    const one = await screen.findByRole('listitem', { name: 'Boravak 10.11.2026 – 11.11.2026' });
+    expect(one).toHaveTextContent(/^.*1 noć · /);
+    expect(one).not.toHaveTextContent('noći');
+    expect(screen.getByRole('listitem', { name: 'Boravak 28.10.2026 – 3.11.2026' })).toHaveTextContent('6 noći');
+  });
+
   it('in safe mode cancelling is disabled; the reservation is still shown', async () => {
     mockFetch(routes('EXPIRED'));
     render(<ReservationDetail id={RES} />);
