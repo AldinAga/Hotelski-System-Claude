@@ -1,0 +1,179 @@
+{
+  "version": "0.1.0",
+  "expiry_modes": ["safe_mode"],
+  "modules": [
+    {
+      "key": "hotel.core",
+      "name": "Jezgro",
+      "description": "Objekat i pravni profil, jedinice i tipovi, osnovni cenovnik, rezervacije, kalendar, check-in/out, gosti, korisnici i uloge, audit, email potvrde.",
+      "depends_on": [],
+      "core": true,
+      "remote_toggle": false,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.folio",
+      "name": "Folio i plaćanja",
+      "description": "Folio, plaćanja, nefiskalni računi i predračuni, IPS QR, avansi, noćni audit.",
+      "depends_on": [],
+      "core": true,
+      "remote_toggle": false,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.eturista",
+      "name": "e-Turista",
+      "description": "Prijava i odjava gostiju, boravišna taksa.",
+      "depends_on": [],
+      "core": true,
+      "remote_toggle": false,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.fiscal_rs",
+      "name": "Fiskalizacija",
+      "description": "Fiskalizacija; zakonski obavezna za pravna lica i preduzetnike.",
+      "depends_on": ["hotel.folio"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": ["legal_entity", "entrepreneur"]
+    },
+    {
+      "key": "hotel.card_payments",
+      "name": "Plaćanje karticom",
+      "description": "Link za plaćanje karticom.",
+      "depends_on": ["hotel.folio"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.rates_advanced",
+      "name": "Napredne cene",
+      "description": "Sezone, restrikcije, pansioni, paketi, izvedeni planovi.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.housekeeping",
+      "name": "Domaćinstvo",
+      "description": "Status jedinica, zadaci, čišćenje posle odlaska, spoljne čistačice, foto-potvrda, prijava štete i zaliha.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.maintenance",
+      "name": "Održavanje",
+      "description": "Kvarovi, jedinice van funkcije.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.b2b",
+      "name": "Firme i agencije",
+      "description": "Firme, agencije, SEF.",
+      "depends_on": ["hotel.folio"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.booking_engine",
+      "name": "Online rezervacije",
+      "description": "Zahtevi i rezervacije sa sajta, widgeta, API-ja i WordPress plugina; red za potvrdu.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.website",
+      "name": "Sajt",
+      "description": "Teme, uređivač, galerija, jezici, domen.",
+      "depends_on": ["hotel.booking_engine"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.guest_portal",
+      "name": "Portal za goste",
+      "description": "Online check-in, digitalni vodič, otkrivanje koda ulaza.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.messaging",
+      "name": "Poruke gostima",
+      "description": "Automatske poruke po događaju; email, SMS, WhatsApp.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.channels",
+      "name": "Channel manager",
+      "description": "Sinhronizacija sa kanalima prodaje.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.pos_link",
+      "name": "Veza sa POS-om",
+      "description": "Veza sa Ugostiteljskim POS-om.",
+      "depends_on": ["hotel.folio"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.door_locks",
+      "name": "Brave i pristup",
+      "description": "Enkoderi kartica, pametne brave, kutije za ključ.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.rentals",
+      "name": "Stan na dan",
+      "description": "Jedinice na različitim adresama, kućni red, naknade, depozit, PWA za domaćina.",
+      "depends_on": ["hotel.core"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    },
+    {
+      "key": "hotel.owners",
+      "name": "Vlasnici jedinica",
+      "description": "Vlasnici, ugovori, mesečni obračun, portal za vlasnika.",
+      "depends_on": ["hotel.folio", "hotel.rentals"],
+      "core": false,
+      "remote_toggle": true,
+      "required_by_profile": []
+    }
+  ],
+  "limit_types": [
+    { "key": "rooms", "name": "Jedinice (sobe ili stanovi)", "unit": "jedinica" },
+    { "key": "users", "name": "Korisnici", "unit": "korisnik" },
+    { "key": "devices", "name": "Uređaji", "unit": "uređaj" },
+    { "key": "lock_encoders", "name": "Enkoderi kartica", "unit": "enkoder" },
+    { "key": "website_languages", "name": "Jezici sajta", "unit": "jezik" },
+    { "key": "gallery_storage_gb", "name": "Prostor za galeriju", "unit": "GB" },
+    { "key": "owners", "name": "Vlasnici jedinica", "unit": "vlasnik" },
+    { "key": "installations", "name": "Instalacije", "unit": "instalacija" }
+  ],
+  "metric_types": []
+}

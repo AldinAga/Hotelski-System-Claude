@@ -62,11 +62,25 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
 
 ### Pokretanje i ažuriranje `claude-hotel`
 
-- Kod: `git archive HEAD | ssh … "tar -x -C /volume1/ci/hotel/src"` (pre toga `rm -rf` samo
+- **Deploy (staging faze 1a):** `bash infrastructure/nas/deploy.sh [ref]` (podrazumevano `HEAD`).
+  Prvo `ci.sh <ref>` (crveno prekida), zatim `git archive <ref>` u `/volume1/ci/hotel/deploy`
+  (nikad radno stablo, nikad `src`), install i build u `hotel-ci-runner-claude` (web sa
+  `HOTEL_API_URL=http://hotel-api-claude:4200`), dopuna `hotel.env` (`hotel-env.sh`, samo dodaje),
+  slika `hotel-claude:<sha>` + `hotel-claude:staging`, `up -d --remove-orphans --wait` za
+  `claude-hotel` (odbija ako bi ponovo napravio bazu ili Redis) i čišćenje: ostaju 3 najnovije
+  `hotel-claude:<sha>` oznake. Ne dira ništa van `claude-hotel`, `hotel-claude` i `/volume1/ci/hotel/deploy`.
+- **Staging adrese:** API `http://192.168.1.199:4200` (`/health`), recepcija `http://192.168.1.199:4201`.
+  Kod za prvo podešavanje: `docker logs hotel-api-claude 2>&1 | grep "Kod za prvo podešavanje"`.
+  Smoke na svežoj instalaciji: `node scripts/smoke-1a.mjs --api http://192.168.1.199:4200 --setup-token … --code …`.
+- **Manifest proizvoda:** `product/manifest.json`; objava `CENTRAL_ADMIN_URL=http://192.168.1.199:4100
+  HOTEL_PUBLISHER_TOKEN=… node scripts/publish-manifest.mjs` (servisni token `product_publisher`,
+  samo uz odobrenje korisnika; svaka izmena manifesta traži veću `version`).
+- Kod za ručno pokretanje baza: `git archive HEAD | ssh … "tar -x -C /volume1/ci/hotel/src"` (pre toga `rm -rf` samo
   `/volume1/ci/hotel/src`).
 - Lozinke: `/volume1/ci/hotel/hotel.env` (`600`, nasumične, napravljene 2026-10-26). Pravi se samo jednom
   i posle se ne menja, jer baze već imaju podatke sa tim lozinkama. Lozinke se ne ispisuju i ne kopiraju
-  u repo.
+  u repo. `deploy.sh` mu samo dodaje `HOTEL_SECRET_KEY`, `HOTEL_ROOT_KEYSET` i `DATABASE_URL` kad
+  nedostaju; postojeće vrednosti ne menja. Proverava se samo po imenima ključeva (`cut -d= -f1`).
 - Pokretanje: `/usr/local/bin/docker compose -f /volume1/ci/hotel/src/infrastructure/docker/docker-compose.yml
   --env-file /volume1/ci/hotel/hotel.env up -d --wait`.
 - Redis nema lozinku; dostupan je samo na `127.0.0.1` NAS-a i u mreži `hotel-network-claude`.
@@ -85,6 +99,7 @@ URI je tajna: ne čuva se u logu ni u repou.
 
 Novi servis dobija sledeći slobodan port iz opsega `4200–4299` i upisuje se u tabelu, `.env.example` i
 compose. Infrastrukturni portovi su vezani na `127.0.0.1` NAS-a; sa računara se dolazi SSH tunelom.
+Staging `hotel-api` (`4200:4200`) i `hotel-web` (`4201:3000` u kontejneru) slušaju na svim adresama NAS-a.
 
 | Servis | Port na NAS-u |
 |---|---|

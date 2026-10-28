@@ -1,0 +1,11 @@
+.git
+.npmrc
+**/.npmrc
+**/.env
+**/.env.*
+.superpowers
+.serena
+.claude
+**/.turbo
+**/.next/cache
+**/coverage

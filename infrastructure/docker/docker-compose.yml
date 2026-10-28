@@ -1,8 +1,11 @@
 # Razvojna infrastruktura hotelskog sistema; radi na NAS-u (192.168.1.199).
 # Projekt claude-hotel i imena hotel-*-claude prate konvenciju NAS-a i ne sudaraju se sa POS-om
 # (claude-pos, pos-*-claude, ugpos-*). Ime hotelski_system je zauzeto: to je zajednički Verdaccio.
-# Portovi su vezani samo na 127.0.0.1; sa računara se dolazi SSH tunelom.
+# Infrastrukturni portovi su vezani samo na 127.0.0.1; sa računara se dolazi SSH tunelom.
+# api (4200) i web (4201) su staging faze 1a i slušaju na svim adresama NAS-a (LAN).
 # Nijedan servis ne sme sam da se ugasi (Container Manager šalje mejl za svaki stop).
+# api i web podiže infrastructure/nas/deploy.sh (slika hotel-claude:staging, env fajl
+# /volume1/ci/hotel/hotel.env); baze i Redis ostaju isti i njihovi volume-i se ne brišu.
 name: claude-hotel
 
 services:
@@ -61,6 +64,61 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - hotel-network-claude
+
+  # Migrira pa sluša, u istom dugotrajnom procesu (main.ts): jednokratni posao
+  # migracije ne sme biti poseban kontejner koji se gasi. migrate() uzima
+  # advisory lock i preskače primenjene fajlove, pa restart ne smeta.
+  api:
+    image: hotel-claude:staging
+    container_name: hotel-api-claude
+    restart: unless-stopped
+    working_dir: /app/apps/hotel-api
+    command: ['node', 'dist/main.js']
+    # DATABASE_URL (na hotel-postgres-claude), HOTEL_SECRET_KEY i HOTEL_ROOT_KEYSET.
+    env_file: /volume1/ci/hotel/hotel.env
+    environment:
+      NODE_ENV: production
+      HOTEL_API_PORT: '4200'
+      CENTRAL_ADMIN_URL: http://192.168.1.199:4100
+      CENTRAL_ADMIN_ALLOW_HTTP: 'true'
+    ports:
+      - '4200:4200'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4200/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    networks:
+      - hotel-network-claude
+
+  # Recepcija. /api/* prosleđuje na hotel-api-claude; to je upisano pri `next build`
+  # (deploy.sh gradi sa HOTEL_API_URL=http://hotel-api-claude:4200).
+  web:
+    image: hotel-claude:staging
+    container_name: hotel-web-claude
+    restart: unless-stopped
+    working_dir: /app/apps/hotel-web
+    command: ['node', 'node_modules/next/dist/bin/next', 'start', '-p', '3000', '-H', '0.0.0.0']
+    environment:
+      NODE_ENV: production
+      HOTEL_API_URL: http://hotel-api-claude:4200
+    ports:
+      - '4201:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
     networks:
       - hotel-network-claude
 
