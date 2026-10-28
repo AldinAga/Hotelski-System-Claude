@@ -78,7 +78,7 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
 - **Staging adrese:** API `http://192.168.1.199:4200` (`/health`), recepcija `http://192.168.1.199:4201`.
   Kod za prvo podešavanje: `docker logs hotel-api-claude 2>&1 | grep "Kod za prvo podešavanje"`.
   Smoke (koraci 4–6 plana, sa vlasnikom): `HOTEL_SMOKE_PASSWORD=… node scripts/smoke-1a.mjs --api http://192.168.1.199:4200
-  --email <pravi email vlasnika> --property-name "<pravo ime objekta>" --setup-token … --code … --totp-out ./owner-totp.txt`.
+  --email <pravi email vlasnika> --property-name "<pravo ime objekta>" --setup-token … --code … --totp-out ~/owner-totp.txt`.
   Nastavljiv je: čita `/setup/status` i preskače urađeno (aktivacija je jednokratna, baze se ne prave ponovo);
   posle završenog podešavanja prijavljuje vlasnika sa `--totp <kod>` ili `--totp-file owner-totp.txt` umesto da ga pravi.
   Ostavlja prave podatke: ime objekta i vlasnika (nema podrazumevanih), tip i cenovnik `SMOKE` (jedinice S-1, S-2) i

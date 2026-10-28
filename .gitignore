@@ -5,3 +5,4 @@ dist/
 .next/
 .turbo/
 *.tsbuildinfo
+*totp*.txt
