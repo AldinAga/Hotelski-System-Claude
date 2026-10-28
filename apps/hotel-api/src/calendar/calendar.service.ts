@@ -11,14 +11,16 @@ export const CALENDAR_MAX_DAYS = 62;
 /**
  * A bar overlapping the range, with its real dates: arrival/departure and
  * from/to are not clipped to the range (the client clips for drawing).
+ * reservationId, number and guest are null when the caller may not see guest
+ * details (housekeeping).
  */
 export type CalendarBar =
   | {
       kind: 'stay';
       stayId: string;
-      reservationId: string;
-      number: string;
-      guest: string;
+      reservationId: string | null;
+      number: string | null;
+      guest: string | null;
       arrival: string;
       departure: string;
       status: string;
@@ -31,15 +33,23 @@ export interface CalendarView {
   units: Array<{ id: string; name: string; unitTypeId: string | null; cleanliness: string; bars: CalendarBar[] }>;
   unassigned: Array<{
     stayId: string;
-    reservationId: string;
-    number: string;
-    guest: string;
+    reservationId: string | null;
+    number: string | null;
+    guest: string | null;
     unitTypeId: string;
     arrival: string;
     departure: string;
-    /** The reservation's version, for POST /stays/:id/assign-unit (optimistic check). */
-    version: number;
+    /**
+     * The reservation's version, for POST /stays/:id/assign-unit (optimistic
+     * check); null without guest details (that role cannot assign).
+     */
+    version: number | null;
   }>;
+}
+
+export interface CalendarOptions {
+  /** false: reservation id, number, guest name and version are null (housekeeping). */
+  guestDetails: boolean;
 }
 
 interface UnitRow {
@@ -102,7 +112,7 @@ export class CalendarService {
     private readonly property: PropertyContext,
   ) {}
 
-  async view(fromRaw: unknown, toRaw: unknown): Promise<CalendarView> {
+  async view(fromRaw: unknown, toRaw: unknown, opts: CalendarOptions): Promise<CalendarView> {
     const { from, to } = rangeOf(fromRaw, toRaw, CALENDAR_MAX_DAYS);
     const propertyId = await this.property.id();
     const days = daysOf(from, to);
@@ -178,16 +188,22 @@ export class CalendarService {
         });
         continue;
       }
+      const details = opts.guestDetails;
       const common = {
         stayId: r.id,
-        reservationId: r.reservation_id as string,
-        number: r.number as string,
-        guest: r.guest as string,
+        reservationId: details ? (r.reservation_id as string) : null,
+        number: details ? (r.number as string) : null,
+        guest: details ? (r.guest as string) : null,
         arrival: span.from,
         departure: span.to,
       };
       if (r.unit_id) push(barsByUnit, r.unit_id, { kind: 'stay', ...common, status: r.status as string });
-      else unassigned.push({ ...common, unitTypeId: r.unit_type_id as string, version: r.version as number });
+      else
+        unassigned.push({
+          ...common,
+          unitTypeId: r.unit_type_id as string,
+          version: details ? (r.version as number) : null,
+        });
     }
 
     return {

@@ -15,6 +15,14 @@ import {
 import { useReadOnly } from '@/lib/use-read-only';
 
 const CANCELLABLE = new Set(['requested', 'confirmed']);
+/**
+ * A stay of a typed booking can be put on (or moved to) another active unit
+ * of its type while it is live. A stay on an untyped unit is booked on that
+ * unit itself and cannot move. Every role that can open this page (owner,
+ * manager, receptionist) may assign: the API refuses housekeeping both.
+ */
+const MOVABLE_STAY = new Set(['expected', 'in_house']);
+const MOVABLE_RESERVATION = new Set(['requested', 'confirmed']);
 
 /** One reservation with the real stay dates (the calendar shows them clipped to its range). */
 export function ReservationDetail({ id }: { id: string }) {
@@ -55,6 +63,26 @@ export function ReservationDetail({ id }: { id: string }) {
     } catch (err) {
       setError(messageFor(err));
     } finally {
+      setBusy(false);
+    }
+  }
+
+  /** POST /stays/:id/assign-unit with the version this screen read; the page is read again either way. */
+  async function moveStay(stayId: string, unitId: string, assigned: boolean) {
+    if (!r) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api(`/stays/${stayId}/assign-unit`, send('POST', { unitId, version: r.version }));
+      const name = names.units.get(unitId)?.name ?? '';
+      setNotice(assigned ? `Boravak je premešten na jedinicu ${name}.` : `Boravku je dodeljena jedinica ${name}.`);
+    } catch (err) {
+      // version_conflict, unit_taken, unit_blocked, …: the dictionary message,
+      // then the current state (new version, where the stay really is).
+      setError(messageFor(err));
+    } finally {
+      await load().catch(() => undefined);
       setBusy(false);
     }
   }
@@ -115,6 +143,17 @@ export function ReservationDetail({ id }: { id: string }) {
                       .join(' · ')}
                   </div>
                   <div>{`Iznos: ${formatRsd(s.totalMinor)}`}</div>
+                  {s.unitTypeId !== null && MOVABLE_STAY.has(s.status) && MOVABLE_RESERVATION.has(r.status) && (
+                    <StayUnitPicker
+                      key={`${s.id}:${s.unitId ?? ''}`}
+                      currentUnitId={s.unitId}
+                      units={[...names.units.values()].filter(
+                        (u) => u.unitTypeId === s.unitTypeId && (u.active || u.id === s.unitId),
+                      )}
+                      disabled={busy || readOnly}
+                      onMove={(unitId) => void moveStay(s.id, unitId, s.unitId !== null)}
+                    />
+                  )}
                 </li>
               );
             })}
@@ -149,5 +188,38 @@ export function ReservationDetail({ id }: { id: string }) {
         </>
       )}
     </main>
+  );
+}
+
+/** The unit select of one stay: "Dodeli" when it has none yet, "Premesti" when it has one. Wraps at 375 px. */
+function StayUnitPicker(props: {
+  currentUnitId: string | null;
+  units: Unit[];
+  disabled: boolean;
+  onMove: (unitId: string) => void;
+}) {
+  const [unitId, setUnitId] = useState(props.currentUnitId ?? '');
+  const assigned = props.currentUnitId !== null;
+  return (
+    <div className="row">
+      <label>
+        Jedinica
+        <select value={unitId} onChange={(e) => setUnitId(e.target.value)} disabled={props.disabled}>
+          {!assigned && <option value="">Izaberite jedinicu</option>}
+          {props.units.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        disabled={props.disabled || unitId === '' || unitId === props.currentUnitId}
+        onClick={() => props.onMove(unitId)}
+      >
+        {assigned ? 'Premesti' : 'Dodeli'}
+      </button>
+    </div>
   );
 }

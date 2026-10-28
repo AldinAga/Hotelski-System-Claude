@@ -127,10 +127,31 @@ export class LicenceService implements OnApplicationShutdown {
       setInterval(() => void this.refreshKeys(), KEY_REFRESH_INTERVAL_MS),
     ];
     for (const timer of this.timers) timer.unref();
+    this.warnIfCutOff();
     void this.heartbeat();
     // At once, not after 24 h: a stored chain that stopped replaying, or a
     // rotation while the API was down, must not leave the licence unverifiable.
     void this.refreshKeys();
+  }
+
+  /**
+   * An activated installation without a client or a secret box never signs a
+   * heartbeat (auth() is null): no renewal arrives and the licence runs into
+   * GRACE and EXPIRED without a sign. Said once, at start, naming only the
+   * missing setting (never a value).
+   */
+  private warnIfCutOff(): void {
+    if (!this.held) return;
+    if (!this.config.client) {
+      this.logger.error(
+        'The installation is activated but CENTRAL_ADMIN_URL is not set: no heartbeat and no licence renewal will reach the Admin Panel.',
+      );
+    }
+    if (!this.config.secretBox) {
+      this.logger.error(
+        'The installation is activated but HOTEL_SECRET_KEY is missing or malformed: the installation key cannot be opened, so no heartbeat and no licence renewal.',
+      );
+    }
   }
 
   /** Resolves when the heartbeat and key refresh in flight (if any) are done. Starts nothing. */

@@ -1,10 +1,12 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { Pool } from 'pg';
 import { AppModule } from './app.module';
 import { SetupService } from './auth/setup.service';
 import { bootOrDegrade } from './boot';
 import { DomainErrorFilter } from './common/domain-error';
+import { configureHttp, HTTP_OPTIONS } from './http';
 import { PG_POOL } from './db/tokens';
 import { migrate } from './db/migrate';
 import { LicenceService } from './licensing/licence.service';
@@ -15,8 +17,11 @@ async function bootstrap(): Promise<void> {
   // abortOnError: false makes Nest throw instead of calling process.exit when a
   // provider fails (for example a malformed HOTEL_ROOT_KEYSET), so the failure
   // reaches bootOrDegrade.
-  const app = await NestFactory.create(AppModule, { abortOnError: false });
+  // HTTP_OPTIONS turns off Nest's default body parsers; configureHttp adds the
+  // request guard and the JSON parser only (src/http.ts, CSRF).
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { abortOnError: false, ...HTTP_OPTIONS });
   try {
+    configureHttp(app);
     app.useGlobalFilters(new DomainErrorFilter());
     app.enableShutdownHooks();
     await migrate(app.get<Pool>(PG_POOL));

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { api, send } from '@/lib/api';
 import { addDays, formatDay, formatRsd, isDay, nightsBetween, parseRsd, today } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
+import { useCanChangeSettings } from '@/lib/use-role';
 import { BOARDS, typeLabel, type RateDay, type RatePlan, type Scope, type Unit, type UnitType } from '@/lib/types';
 
 /** Days shown in the grid at once. */
@@ -55,6 +56,8 @@ interface Selection {
 }
 
 export default function RatesPage() {
+  // Prices and plans change for owner and manager only (@Roles in hotel-api).
+  const canChange = useCanChangeSettings();
   const [plans, setPlans] = useState<RatePlan[] | null>(null);
   const [scopes, setScopes] = useState<ScopeOption[]>([]);
   const [planId, setPlanId] = useState('');
@@ -198,6 +201,7 @@ export default function RatesPage() {
         </p>
       )}
       {!plans && !error && <p className="muted">Učitavanje…</p>}
+      {!canChange && <p className="help">Cene menja vlasnik ili menadžer.</p>}
 
       {plans && (
         <>
@@ -261,57 +265,61 @@ export default function RatesPage() {
               </div>
             )}
 
-            <div className="row">
-              <label>
-                Prvi dan
-                <input
-                  type="date"
-                  value={selection?.first ?? ''}
-                  onChange={(e) =>
-                    setSelection((s) => ({ first: e.target.value, last: s?.last ?? e.target.value, extending: false }))
-                  }
-                />
-              </label>
-              <label>
-                Poslednji dan
-                <input
-                  type="date"
-                  value={selection?.last ?? ''}
-                  onChange={(e) =>
-                    setSelection((s) => ({ first: s?.first ?? e.target.value, last: e.target.value, extending: false }))
-                  }
-                />
-              </label>
-            </div>
-            {range && (
-              <p>{`Izabrano: ${formatDay(range.from)} – ${formatDay(addDays(range.to, -1))} (${nightsText(nightsBetween(range.from, range.to))})`}</p>
-            )}
+            {canChange && (
+              <>
+                <div className="row">
+                  <label>
+                    Prvi dan
+                    <input
+                      type="date"
+                      value={selection?.first ?? ''}
+                      onChange={(e) =>
+                        setSelection((s) => ({ first: e.target.value, last: s?.last ?? e.target.value, extending: false }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Poslednji dan
+                    <input
+                      type="date"
+                      value={selection?.last ?? ''}
+                      onChange={(e) =>
+                        setSelection((s) => ({ first: s?.first ?? e.target.value, last: e.target.value, extending: false }))
+                      }
+                    />
+                  </label>
+                </div>
+                {range && (
+                  <p>{`Izabrano: ${formatDay(range.from)} – ${formatDay(addDays(range.to, -1))} (${nightsText(nightsBetween(range.from, range.to))})`}</p>
+                )}
 
-            <form className="row" onSubmit={onSetPrice} aria-label="Cena za izabrane dane">
-              <label>
-                Cena po noći (RSD)
-                <input value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" placeholder="npr. 5.500" />
-              </label>
-              <button type="submit" disabled={busy}>
-                Postavi cenu
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => apply({ closed: true }, (n) => `Zatvoreno: ${nightsText(n)}.`)}
-              >
-                Zatvori dane
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => apply({ closed: false }, (n) => `Otvoreno: ${nightsText(n)}.`)}
-              >
-                Otvori dane
-              </button>
-            </form>
+                <form className="row" onSubmit={onSetPrice} aria-label="Cena za izabrane dane">
+                  <label>
+                    Cena po noći (RSD)
+                    <input value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" placeholder="npr. 5.500" />
+                  </label>
+                  <button type="submit" disabled={busy}>
+                    Postavi cenu
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => apply({ closed: true }, (n) => `Zatvoreno: ${nightsText(n)}.`)}
+                  >
+                    Zatvori dane
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => apply({ closed: false }, (n) => `Otvoreno: ${nightsText(n)}.`)}
+                  >
+                    Otvori dane
+                  </button>
+                </form>
+              </>
+            )}
           </div>
 
           <h2>Cenovnici</h2>
@@ -326,26 +334,30 @@ export default function RatesPage() {
                   {BOARDS.find((b) => b.value === p.board)?.label ?? p.board}
                   {` · popust 7+ noći ${p.discount7Pct}% · popust 30+ noći ${p.discount30Pct}%`}
                 </div>
-                <div className="row">
-                  <button
-                    type="button"
-                    className={p.active ? 'danger' : 'secondary'}
-                    disabled={busy}
-                    onClick={() =>
-                      changePlan(
-                        () => api(`/rate-plans/${p.id}`, send('PATCH', { active: !p.active })),
-                        p.active ? 'Cenovnik je isključen.' : 'Cenovnik je uključen.',
-                      )
-                    }
-                  >
-                    {p.active ? 'Isključi' : 'Uključi'}
-                  </button>
-                </div>
+                {canChange && (
+                  <div className="row">
+                    <button
+                      type="button"
+                      className={p.active ? 'danger' : 'secondary'}
+                      disabled={busy}
+                      onClick={() =>
+                        changePlan(
+                          () => api(`/rate-plans/${p.id}`, send('PATCH', { active: !p.active })),
+                          p.active ? 'Cenovnik je isključen.' : 'Cenovnik je uključen.',
+                        )
+                      }
+                    >
+                      {p.active ? 'Isključi' : 'Uključi'}
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
             {plans.length === 0 && <li className="muted">Još nema cenovnika.</li>}
           </ul>
-          <PlanForm busy={busy} onSubmit={(body) => changePlan(() => api('/rate-plans', send('POST', body)), 'Cenovnik je dodat.')} />
+          {canChange && (
+            <PlanForm busy={busy} onSubmit={(body) => changePlan(() => api('/rate-plans', send('POST', body)), 'Cenovnik je dodat.')} />
+          )}
         </>
       )}
     </main>

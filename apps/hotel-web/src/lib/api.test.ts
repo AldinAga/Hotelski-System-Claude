@@ -87,6 +87,21 @@ describe('messageFor', () => {
     expect(messageFor(new ApiError(500, 'something_new', 'Serverska poruka.', null))).toBe('Serverska poruka.');
   });
 
+  it('unit_has_stays points to where a stay can be moved, and says an untyped one cannot be', () => {
+    const text = MESSAGES.unit_has_stays;
+    expect(text).toMatch(/stranici rezervacije/);
+    expect(text).toMatch(/bez tipa/);
+    expect(text).toMatch(/otkaž/);
+    expect(text).not.toMatch(/Prvo ga premestite na drugu jedinicu, pa ponovo/);
+  });
+
+  it('covers the refusals of the request guard (src/http.ts in hotel-api)', () => {
+    const http = readFileSync(resolve(__dirname, '../../../hotel-api/src/http.ts'), 'utf8');
+    const codes = [...http.matchAll(/refuse\(\s*res,\s*\d+,\s*'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(codes.sort()).toEqual(['origin_refused', 'unsupported_media_type']);
+    for (const code of codes) expect(MESSAGES[code], code).toBeTruthy();
+  });
+
   it('covers every refusal of a unit change', () => {
     for (const code of ['unit_has_blocks', 'unit_has_stays', 'inventory_conflict', 'scope_not_priced', 'setup_token_invalid']) {
       expect(MESSAGES[code], code).toBeTruthy();

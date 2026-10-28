@@ -69,17 +69,27 @@ export function CalendarGrid({ view, readOnly, onPickCell, onAssign }: CalendarG
 
   function stayBar(
     key: string,
-    bar: { reservationId: string; number: string; guest: string; arrival: string; departure: string },
+    bar: { reservationId: string | null; number: string | null; guest: string | null; arrival: string; departure: string },
     span: Span,
     row: number,
     extra: { status?: string; drag?: UnassignedStay },
   ) {
+    const className = `bar stay${extra.status ? ` status-${extra.status}` : ' unassigned'}${edges(span)}`;
+    // Housekeeping gets no guest data (reservationId null): the bar only shows
+    // that the unit is taken, and is no link (the reservation would be a 403).
+    if (bar.reservationId === null) {
+      return (
+        <div key={key} className={className} style={place(span, row)} title="Zauzeto" aria-label="Zauzeto">
+          <span className="bar-text">Zauzeto</span>
+        </div>
+      );
+    }
     const drag = extra.drag;
     return (
       <a
         key={key}
         href={`/rezervacije/${bar.reservationId}`}
-        className={`bar stay${extra.status ? ` status-${extra.status}` : ' unassigned'}${edges(span)}`}
+        className={className}
         style={place(span, row)}
         aria-label={`${bar.number} · ${bar.guest}`}
         title={span.before || span.after ? 'Boravak traje i van prikazanih dana; tačni datumi su u rezervaciji.' : undefined}
@@ -246,37 +256,41 @@ function UnassignedItem(props: {
   const [unitId, setUnitId] = useState('');
   const units = view.units.filter((u) => u.unitTypeId === stay.unitTypeId);
   const typeLabel = view.availability.find((a) => a.scope.kind === 'unit_type' && a.scope.id === stay.unitTypeId)?.label;
+  // Without guest data (housekeeping) there is no version to send, and that
+  // role cannot assign anyway: the stay is listed, without controls.
+  const anonymous = stay.reservationId === null || stay.version === null;
+  const label = anonymous ? 'Zauzeto' : `${stay.number} · ${stay.guest}`;
   return (
-    <li aria-label={`${stay.number} · ${stay.guest}`}>
+    <li aria-label={label}>
       <div className="head">
-        <strong>
-          {stay.number} · {stay.guest}
-        </strong>
+        <strong>{label}</strong>
         {typeLabel && <span className="badge">{typeLabel}</span>}
       </div>
       <div className="muted">
         {formatDay(stay.arrival)} – {formatDay(stay.departure)}
       </div>
-      <div className="row">
-        <label>
-          Jedinica
-          <select value={unitId} onChange={(e) => setUnitId(e.target.value)} disabled={props.readOnly}>
-            <option value="">Izaberite jedinicu</option>
-            {units.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={props.readOnly || unitId === ''}
-          onClick={() => props.onAssign(stay, unitId)}
-        >
-          Dodeli
-        </button>
-      </div>
+      {!anonymous && (
+        <div className="row">
+          <label>
+            Jedinica
+            <select value={unitId} onChange={(e) => setUnitId(e.target.value)} disabled={props.readOnly}>
+              <option value="">Izaberite jedinicu</option>
+              {units.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={props.readOnly || unitId === ''}
+            onClick={() => props.onAssign(stay, unitId)}
+          >
+            Dodeli
+          </button>
+        </div>
+      )}
     </li>
   );
 }

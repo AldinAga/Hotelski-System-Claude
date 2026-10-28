@@ -169,4 +169,33 @@ describe('/podesavanja/cene', () => {
     await user.click(screen.getByRole('button', { name: 'Postavi cenu' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Sistem radi u sigurnom režimu');
   });
+
+  describe('roles (the API changes prices for owner and manager only)', () => {
+    const me = (role: string) => ({ 'GET /api/auth/me': { body: { id: 'u', email: 'x@hotel.test', name: 'X', role } } });
+    const changeControls = () => [
+      screen.queryByRole('button', { name: 'Postavi cenu' }),
+      screen.queryByRole('button', { name: 'Zatvori dane' }),
+      screen.queryByRole('button', { name: 'Otvori dane' }),
+      screen.queryByRole('button', { name: 'Isključi' }),
+      screen.queryByRole('form', { name: 'Novi cenovnik' }),
+    ];
+
+    it('a manager gets the change controls', async () => {
+      mockFetch(routes(me('manager')));
+      render(<RatesPage />);
+      await screen.findByRole('button', { name: /^2026-11-02, 10\.000,00 RSD/ });
+      await vi.waitFor(() => expect(changeControls().every((c) => c !== null)).toBe(true));
+    });
+
+    for (const role of ['receptionist', 'housekeeping']) {
+      it(`${role} sees the prices but no change controls`, async () => {
+        const calls = mockFetch(routes(me(role)));
+        render(<RatesPage />);
+        expect(await screen.findByRole('button', { name: /^2026-11-02, 10\.000,00 RSD/ })).toBeInTheDocument();
+        await vi.waitFor(() => expect(changeControls()).toEqual([null, null, null, null, null]));
+        expect(screen.getByText('Cene menja vlasnik ili menadžer.')).toBeInTheDocument();
+        expect(calls.filter((c) => c.method !== 'GET')).toEqual([]);
+      });
+    }
+  });
 });

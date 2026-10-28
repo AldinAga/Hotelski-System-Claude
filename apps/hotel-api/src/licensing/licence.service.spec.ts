@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import type { SignedKeySet } from '@platform/licensing';
 import { createTestDb, type TestDb } from '../../test/db';
 import { startFakeCentralAdmin, type FakeCentralAdmin, type IssueCodeOptions } from '../../test/fake-central-admin';
@@ -383,6 +384,52 @@ describe('LicenceService', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  describe('start() on an activated installation that cannot reach the Admin Panel', () => {
+    // Final review Minor: without a client or a secret box auth() returns null,
+    // heartbeats stop and a paid renewal never arrives. start() says so once.
+    const NO_CLIENT = /CENTRAL_ADMIN_URL/;
+    const NO_BOX = /HOTEL_SECRET_KEY/;
+
+    async function logsOfStart(partial: Partial<LicensingConfig>, activated = true): Promise<string[]> {
+      if (activated) await activate();
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      try {
+        service = new LicenceService(store, { ...config, ...partial });
+        await service.start();
+        await service.start(); // a second call must not repeat the line
+        await service.idle();
+        return error.mock.calls.map((c) => String(c[0]));
+      } finally {
+        error.mockRestore();
+      }
+    }
+
+    it('CENTRAL_ADMIN_URL unset: exactly one line naming it', async () => {
+      const lines = await logsOfStart({ client: null });
+      expect(lines.filter((l) => NO_CLIENT.test(l))).toHaveLength(1);
+      expect(lines.filter((l) => NO_BOX.test(l))).toHaveLength(0);
+    });
+
+    it('HOTEL_SECRET_KEY missing or malformed: exactly one line naming it, without any key material', async () => {
+      const lines = await logsOfStart({ secretBox: null });
+      const hit = lines.filter((l) => NO_BOX.test(l));
+      expect(hit).toHaveLength(1);
+      expect(lines.filter((l) => NO_CLIENT.test(l))).toHaveLength(0);
+      const { rows } = await t.pool.query(`SELECT installation_id FROM installation_licence`);
+      expect(hit[0]).not.toContain(rows[0].installation_id);
+    });
+
+    it('not activated: nothing to say (nothing to keep fresh yet)', async () => {
+      const lines = await logsOfStart({ client: null, secretBox: null }, false);
+      expect(lines.filter((l) => NO_CLIENT.test(l) || NO_BOX.test(l))).toEqual([]);
+    });
+
+    it('fully configured: no such line', async () => {
+      const lines = await logsOfStart({});
+      expect(lines.filter((l) => NO_CLIENT.test(l) || NO_BOX.test(l))).toEqual([]);
+    });
   });
 
   describe('assertLimit', () => {

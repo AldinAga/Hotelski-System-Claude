@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { api, ApiError, send } from '@/lib/api';
 import { addDays, formatDay, isDay, today } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
+import { useCanChangeSettings } from '@/lib/use-role';
 import {
   BLOCK_REASONS,
   persons,
@@ -42,6 +43,8 @@ function nightsLabel(from: string, to: string): string {
 const reasonLabel = (r: BlockReason) => BLOCK_REASONS.find((x) => x.value === r)?.label ?? r;
 
 export default function UnitsPage() {
+  // Units, types and blocks change for owner and manager only (@Roles in hotel-api).
+  const canChange = useCanChangeSettings();
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -104,7 +107,7 @@ export default function UnitsPage() {
       {error && (
         <div role="alert" className="error stack">
           <span>{error}</span>
-          {stuckBlock && (
+          {stuckBlock && canChange && (
             <button
               type="button"
               className="danger"
@@ -125,6 +128,7 @@ export default function UnitsPage() {
         </p>
       )}
       {!data && !error && <p className="muted">Učitavanje…</p>}
+      {!canChange && <p className="help">Jedinice i blokade menja vlasnik ili menadžer.</p>}
 
       {data && (
         <>
@@ -143,52 +147,56 @@ export default function UnitsPage() {
                   {persons(t.capacity)}
                   {t.beds ? ` · ${t.beds}` : ''}
                 </div>
-                <div className="row">
-                  <button type="button" className="secondary" disabled={busy} onClick={() => setEditingType(t)}>
-                    Izmeni
-                  </button>
-                  <button
-                    type="button"
-                    className={t.active ? 'danger' : 'secondary'}
-                    disabled={busy}
-                    onClick={() =>
-                      change(
-                        () => api(`/unit-types/${t.id}`, send('PATCH', { active: !t.active })),
-                        t.active ? 'Tip je isključen.' : 'Tip je uključen.',
-                      )
-                    }
-                  >
-                    {t.active ? 'Isključi' : 'Uključi'}
-                  </button>
-                </div>
+                {canChange && (
+                  <div className="row">
+                    <button type="button" className="secondary" disabled={busy} onClick={() => setEditingType(t)}>
+                      Izmeni
+                    </button>
+                    <button
+                      type="button"
+                      className={t.active ? 'danger' : 'secondary'}
+                      disabled={busy}
+                      onClick={() =>
+                        change(
+                          () => api(`/unit-types/${t.id}`, send('PATCH', { active: !t.active })),
+                          t.active ? 'Tip je isključen.' : 'Tip je uključen.',
+                        )
+                      }
+                    >
+                      {t.active ? 'Isključi' : 'Uključi'}
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
             {data.types.length === 0 && <li className="muted">Još nema tipova.</li>}
           </ul>
 
-          <TypeForm
-            key={`type-${editingType?.id ?? 'new'}`}
-            editing={editingType}
-            busy={busy}
-            onCancel={() => setEditingType(null)}
-            onSubmit={async (body) => {
-              const ok = await change(
-                () =>
-                  editingType
-                    ? api(`/unit-types/${editingType.id}`, send('PATCH', body))
-                    : api('/unit-types', send('POST', body)),
-                editingType ? 'Tip je sačuvan.' : 'Tip je dodat.',
-              );
-              if (ok) setEditingType(null);
-              return ok;
-            }}
-          />
+          {canChange && (
+            <TypeForm
+              key={`type-${editingType?.id ?? 'new'}`}
+              editing={editingType}
+              busy={busy}
+              onCancel={() => setEditingType(null)}
+              onSubmit={async (body) => {
+                const ok = await change(
+                  () =>
+                    editingType
+                      ? api(`/unit-types/${editingType.id}`, send('PATCH', body))
+                      : api('/unit-types', send('POST', body)),
+                  editingType ? 'Tip je sačuvan.' : 'Tip je dodat.',
+                );
+                if (ok) setEditingType(null);
+                return ok;
+              }}
+            />
+          )}
 
           <h2>Jedinice</h2>
           <p className="help">
             Isključena jedinica se ne prodaje. Jedinica sa blokadom ili dodeljenim boravkom koji još traje ne može da
-            promeni tip niti da se isključi dok se blokada ne ukloni ili boravak ne premesti. Prikazane su blokade u
-            {` ${BLOCK_WINDOW_DAYS} dana od izabranog datuma; za kasnije blokade pomerite datum.`}
+            promeni tip niti da se isključi dok se blokada ne ukloni ili boravak ne premesti (na stranici
+            rezervacije). Prikazane su blokade u{` ${BLOCK_WINDOW_DAYS} dana od izabranog datuma; za kasnije blokade pomerite datum.`}
           </p>
           <div className="row">
             <label>
@@ -212,52 +220,56 @@ export default function UnitsPage() {
                       {blocks.map((b) => (
                         <li key={b.id} className="row" style={{ alignItems: 'center' }}>
                           <span>{`${nightsLabel(b.from, b.to)} · ${reasonLabel(b.reason)}`}</span>
-                          <button
-                            type="button"
-                            className="danger"
-                            disabled={busy}
-                            aria-label={`Ukloni blokadu ${nightsLabel(b.from, b.to)}`}
-                            onClick={() =>
-                              change(
-                                () => api(`/units/${u.id}/blocks/${b.id}`, send('DELETE')),
-                                'Blokada je uklonjena.',
-                              )
-                            }
-                          >
-                            Ukloni
-                          </button>
+                          {canChange && (
+                            <button
+                              type="button"
+                              className="danger"
+                              disabled={busy}
+                              aria-label={`Ukloni blokadu ${nightsLabel(b.from, b.to)}`}
+                              onClick={() =>
+                                change(
+                                  () => api(`/units/${u.id}/blocks/${b.id}`, send('DELETE')),
+                                  'Blokada je uklonjena.',
+                                )
+                              }
+                            >
+                              Ukloni
+                            </button>
+                          )}
                         </li>
                       ))}
                     </ul>
                   )}
-                  <div className="row">
-                    <button type="button" className="secondary" disabled={busy} onClick={() => setEditingUnit(u)}>
-                      Izmeni
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => setBlockFormFor(blockFormFor === u.id ? null : u.id)}
-                    >
-                      Dodaj blokadu
-                    </button>
-                    <button
-                      type="button"
-                      className={u.active ? 'danger' : 'secondary'}
-                      disabled={busy}
-                      onClick={() =>
-                        change(
-                          () => api(`/units/${u.id}`, send('PATCH', { active: !u.active })),
-                          u.active ? 'Jedinica je isključena.' : 'Jedinica je uključena.',
-                          u.id,
-                        )
-                      }
-                    >
-                      {u.active ? 'Isključi' : 'Uključi'}
-                    </button>
-                  </div>
-                  {blockFormFor === u.id && (
+                  {canChange && (
+                    <div className="row">
+                      <button type="button" className="secondary" disabled={busy} onClick={() => setEditingUnit(u)}>
+                        Izmeni
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => setBlockFormFor(blockFormFor === u.id ? null : u.id)}
+                      >
+                        Dodaj blokadu
+                      </button>
+                      <button
+                        type="button"
+                        className={u.active ? 'danger' : 'secondary'}
+                        disabled={busy}
+                        onClick={() =>
+                          change(
+                            () => api(`/units/${u.id}`, send('PATCH', { active: !u.active })),
+                            u.active ? 'Jedinica je isključena.' : 'Jedinica je uključena.',
+                            u.id,
+                          )
+                        }
+                      >
+                        {u.active ? 'Isključi' : 'Uključi'}
+                      </button>
+                    </div>
+                  )}
+                  {canChange && blockFormFor === u.id && (
                     <BlockForm
                       unit={u}
                       busy={busy}
@@ -277,25 +289,27 @@ export default function UnitsPage() {
             {data.units.length === 0 && <li className="muted">Još nema jedinica.</li>}
           </ul>
 
-          <UnitForm
-            key={`unit-${editingUnit?.id ?? 'new'}`}
-            editing={editingUnit}
-            types={data.types}
-            busy={busy}
-            onCancel={() => setEditingUnit(null)}
-            onSubmit={async (body) => {
-              const ok = await change(
-                () =>
-                  editingUnit
-                    ? api(`/units/${editingUnit.id}`, send('PATCH', body))
-                    : api('/units', send('POST', body)),
-                editingUnit ? 'Jedinica je sačuvana.' : 'Jedinica je dodata.',
-                editingUnit?.id,
-              );
-              if (ok) setEditingUnit(null);
-              return ok;
-            }}
-          />
+          {canChange && (
+            <UnitForm
+              key={`unit-${editingUnit?.id ?? 'new'}`}
+              editing={editingUnit}
+              types={data.types}
+              busy={busy}
+              onCancel={() => setEditingUnit(null)}
+              onSubmit={async (body) => {
+                const ok = await change(
+                  () =>
+                    editingUnit
+                      ? api(`/units/${editingUnit.id}`, send('PATCH', body))
+                      : api('/units', send('POST', body)),
+                  editingUnit ? 'Jedinica je sačuvana.' : 'Jedinica je dodata.',
+                  editingUnit?.id,
+                );
+                if (ok) setEditingUnit(null);
+                return ok;
+              }}
+            />
+          )}
         </>
       )}
     </main>

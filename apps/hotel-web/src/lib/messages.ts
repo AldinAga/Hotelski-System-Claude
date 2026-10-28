@@ -31,6 +31,8 @@ export const MESSAGES: Record<string, string> = {
   too_many_attempts: 'Previše neuspešnih pokušaja prijave. Pokušajte ponovo za 15 minuta.',
   session_required: 'Prijavite se da biste nastavili.',
   forbidden_role: 'Vaša uloga nema pravo na ovu radnju.',
+  origin_refused: 'Zahtev je poslat sa druge adrese i odbijen je. Otvorite recepciju direktno i pokušajte ponovo.',
+  unsupported_media_type: 'Zahtev mora biti poslat kao JSON.',
   actor_changed: 'Vaš nalog je u međuvremenu izmenjen. Prijavite se ponovo.',
   password_too_short: 'Lozinka mora imati najmanje {min} znakova.',
   password_too_long: 'Lozinka može imati najviše {max} znakova.',
@@ -55,7 +57,8 @@ export const MESSAGES: Record<string, string> = {
   unit_name_taken: 'Jedinica sa ovim nazivom već postoji.',
   unit_inactive: 'Jedinica je isključena.',
   unit_has_blocks: 'Jedinica ima blokadu koja još traje. Prvo uklonite blokadu, pa ponovo pokušajte.',
-  unit_has_stays: 'Jedinici je dodeljen boravak koji još traje. Prvo ga premestite na drugu jedinicu, pa ponovo pokušajte.',
+  unit_has_stays:
+    'Jedinici je dodeljen boravak koji još traje. Boravak rezervisan po tipu premestite na drugu jedinicu na stranici rezervacije; boravak na jedinici bez tipa ne može da se premesti, pa ga otkažite ili sačekajte da se završi.',
   inventory_conflict: 'Za {day} je već prodato ili blokirano više jedinica nego što bi ostalo posle ove izmene.',
   scope_not_found: 'Tip ili jedinica ne postoji. Osvežite stranicu.',
 

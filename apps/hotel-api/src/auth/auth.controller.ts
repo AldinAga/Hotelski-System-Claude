@@ -5,8 +5,14 @@ import { Unlicensed } from '../licensing/licensed-action';
 import { CurrentUser, Public } from './auth.guard';
 import { SESSION_COOKIE, SessionsService, type AuthUser, type PublicUser } from './sessions.service';
 
-// HttpOnly keeps the token from scripts; SameSite=Strict keeps other sites
-// from sending it (no CSRF token needed); Secure when the request is https.
+// HttpOnly keeps the token from scripts. SameSite=Strict keeps other *sites*
+// from sending it, but SameSite ignores ports: every app on the same host
+// (Admin Panel, POS, Portainer, hotel-hub on 192.168.1.199) is the same site
+// and its pages would send this cookie. Cross-site request forgery is closed
+// by src/http.ts instead (JSON bodies only, unsafe methods refused from a
+// foreign Origin/Sec-Fetch-Site). Production gets its own hostname.
+// Secure when the request is https, also behind the Next rewrite or another
+// trusted proxy: req.secure reads X-Forwarded-Proto there (trust proxy, src/http.ts).
 function cookieOptions(req: Request): CookieOptions {
   return { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/' };
 }

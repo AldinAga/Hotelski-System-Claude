@@ -65,7 +65,8 @@ describe('scripts/smoke-1a.mjs (e2e)', () => {
     await fake?.close();
   });
 
-  const args = (setupToken: string, code: string) => [
+  const PROPERTY = 'Vila Jasen';
+  const args = (setupToken: string, code: string, property = PROPERTY) => [
     '--api',
     api,
     '--setup-token',
@@ -74,29 +75,123 @@ describe('scripts/smoke-1a.mjs (e2e)', () => {
     code,
     '--email',
     'smoke@hotel.test',
+    '--property-name',
+    property,
+  ];
+  const PASSWORD_ENV = { HOTEL_SMOKE_PASSWORD: 'smoke-lozinka-1a' };
+  const q = async (sql: string) => (await ta.testDb.pool.query(sql)).rows;
+  // The fake lives for the whole describe: count this test's activations only.
+  const allActivations = () => fake.requests.filter((r) => r.path === '/v1/installations/activate').length;
+  let activationsBefore = 0;
+  beforeEach(() => {
+    activationsBefore = allActivations();
+  });
+  const activations = () => allActivations() - activationsBefore;
+  const lines = (out: Outcome) => out.stdout.trim().split('\n');
+  const ALL_STEPS = [
+    'health',
+    'setup status',
+    'activation with the code',
+    'owner created (TOTP from totpUri)',
+    'TOTP confirmed, setup closed',
+    'owner signs in with password and TOTP',
+    'unit type SMOKE with 2 units',
+    'rate plan SMOKE priced for 30 days',
   ];
 
   it('a fresh installation: every step OK, exit 0, and the run really happened', async () => {
     const setupToken = (await ta.app.get(SetupService).prepareOnBoot())!;
     const code = fake.issueCode({ licence: { limits: { rooms: 20, users: 10 } } });
-    const out = await node(SMOKE, args(setupToken, code), { HOTEL_SMOKE_PASSWORD: 'smoke-lozinka-1a' });
+    const out = await node(SMOKE, args(setupToken, code), PASSWORD_ENV);
 
     expect(out.stdout).not.toMatch(/FAIL/);
     expect(out.code).toBe(0);
-    const steps = out.stdout.trim().split('\n');
-    expect(steps).toHaveLength(11);
+    const steps = lines(out);
+    expect(steps).toHaveLength(12);
     expect(steps.every((l) => l.startsWith('OK '))).toBe(true);
+    expect(steps.slice(0, ALL_STEPS.length).map((l) => l.replace(/^OK +/, ''))).toEqual(ALL_STEPS);
     // The secret never reaches the output.
     expect(out.stdout + out.stderr).not.toMatch(/otpauth|secret=/);
 
-    const q = async (sql: string) => (await ta.testDb.pool.query(sql)).rows;
     expect(await q(`SELECT email, role, totp_state FROM app_user`)).toEqual([
       { email: 'smoke@hotel.test', role: 'owner', totp_state: 'confirmed' },
     ]);
+    // The real name given on the command line, never a made-up default.
+    expect(await q(`SELECT name FROM property`)).toEqual([{ name: PROPERTY }]);
     expect(await q(`SELECT count(*)::int AS n FROM unit`)).toEqual([{ n: 2 }]);
     expect(await q(`SELECT status FROM reservation`)).toEqual([{ status: 'cancelled' }]);
     // Cancelling gave the nights back.
     expect(await q(`SELECT coalesce(sum(sold), 0)::int AS sold FROM inventory_day`)).toEqual([{ sold: 0 }]);
+  });
+
+  it('resumes after a failure past activation: activation is skipped (the code is single-use), the rest runs', async () => {
+    const setupToken = (await ta.app.get(SetupService).prepareOnBoot())!;
+    const code = fake.issueCode({ licence: { limits: { rooms: 20, users: 10 } } });
+    // The owner step fails: a property name longer than the API accepts.
+    const first = await node(SMOKE, args(setupToken, code, 'x'.repeat(201)), PASSWORD_ENV);
+    expect(first.code).toBe(1);
+    expect(first.stdout).toMatch(/^OK +activation with the code$/m);
+    expect(first.stdout).toMatch(/^FAIL owner created \(TOTP from totpUri\): HTTP 422/m);
+    expect(activations()).toBe(1);
+
+    // Same command again (the code is spent): activation is skipped, not refused.
+    const again = await node(SMOKE, args(setupToken, code), PASSWORD_ENV);
+    expect(again.stdout).not.toMatch(/FAIL/);
+    expect(again.code).toBe(0);
+    expect(again.stdout).toMatch(/^SKIP activation with the code: already activated$/m);
+    expect(again.stdout).toMatch(/^OK +smoke 1a passed$/m);
+    expect(activations()).toBe(1);
+    expect(await q(`SELECT name FROM property`)).toEqual([{ name: PROPERTY }]);
+  });
+
+  it('after setup is done it signs in with the TOTP file instead of creating the owner, and reuses its data', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'smoke-resume-'));
+    const file = join(dir, 'owner-totp.txt');
+    try {
+      const setupToken = (await ta.app.get(SetupService).prepareOnBoot())!;
+      const code = fake.issueCode({ licence: { limits: { rooms: 20, users: 10 } } });
+      expect((await node(SMOKE, [...args(setupToken, code), '--totp-out', file], PASSWORD_ENV)).code).toBe(0);
+      // Later, in another 30 s step: the codes of the first run are behind.
+      await ta.testDb.pool.query(`UPDATE app_user SET totp_last_step = totp_last_step - 10`);
+
+      const out = await node(
+        SMOKE,
+        ['--api', api, '--email', 'smoke@hotel.test', '--property-name', PROPERTY, '--totp-file', file],
+        PASSWORD_ENV,
+      );
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      const steps = lines(out);
+      expect(steps.slice(0, ALL_STEPS.length)).toEqual([
+        'OK   health',
+        'OK   setup status',
+        'SKIP activation with the code: setup is done',
+        'SKIP owner created (TOTP from totpUri): setup is done',
+        'SKIP TOTP confirmed, setup closed: setup is done',
+        'OK   owner signs in with password and TOTP',
+        'OK   unit type SMOKE with 2 units',
+        'OK   rate plan SMOKE priced for 30 days',
+      ]);
+      expect(out.stdout + out.stderr).not.toMatch(/otpauth|secret=/);
+      // Nothing duplicated; one more (cancelled) reservation.
+      expect(await q(`SELECT count(*)::int AS n FROM app_user`)).toEqual([{ n: 1 }]);
+      expect(await q(`SELECT count(*)::int AS n FROM unit_type`)).toEqual([{ n: 1 }]);
+      expect(await q(`SELECT count(*)::int AS n FROM unit`)).toEqual([{ n: 2 }]);
+      expect(await q(`SELECT count(*)::int AS n FROM rate_plan`)).toEqual([{ n: 1 }]);
+      expect(await q(`SELECT status FROM reservation`)).toEqual([{ status: 'cancelled' }, { status: 'cancelled' }]);
+      expect(activations()).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('after setup is done, without --totp or --totp-file it stops before signing in', async () => {
+    const setupToken = (await ta.app.get(SetupService).prepareOnBoot())!;
+    const code = fake.issueCode({ licence: { limits: { rooms: 20, users: 10 } } });
+    expect((await node(SMOKE, args(setupToken, code), PASSWORD_ENV)).code).toBe(0);
+    const out = await node(SMOKE, ['--api', api, '--email', 'smoke@hotel.test', '--property-name', PROPERTY], PASSWORD_ENV);
+    expect(out.code).toBe(1);
+    expect(out.stdout).toMatch(/^FAIL owner signs in with password and TOTP: setup is done; give --totp <code> or --totp-file <file>/m);
   });
 
   it('--totp-out narrows a file that already exists to mode 600', async () => {
@@ -123,17 +218,25 @@ describe('scripts/smoke-1a.mjs (e2e)', () => {
 
   it('a step that fails stops the run with FAIL and exit 1', async () => {
     const setupToken = (await ta.app.get(SetupService).prepareOnBoot())!;
-    const out = await node(SMOKE, args(setupToken, 'not-a-real-code'), { HOTEL_SMOKE_PASSWORD: 'smoke-lozinka-1a' });
+    const out = await node(SMOKE, args(setupToken, 'not-a-real-code'), PASSWORD_ENV);
     expect(out.code).toBe(1);
     expect(out.stdout).toMatch(/^OK +health$/m);
     expect(out.stdout).toMatch(/^FAIL activation with the code: HTTP 4\d\d/m);
     expect(out.stdout).not.toMatch(/owner created/);
   });
 
-  it('refuses to start without the arguments it needs', async () => {
-    const out = await node(SMOKE, ['--api', api]);
-    expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/--setup-token is required/);
+  it('refuses to start without the arguments it needs; there is no default owner or property', async () => {
+    const noEmail = await node(SMOKE, ['--api', api, '--property-name', PROPERTY], PASSWORD_ENV);
+    expect(noEmail.code).toBe(1);
+    expect(noEmail.stderr).toMatch(/--email is required/);
+    const noProperty = await node(SMOKE, ['--api', api, '--email', 'smoke@hotel.test'], PASSWORD_ENV);
+    expect(noProperty.code).toBe(1);
+    expect(noProperty.stderr).toMatch(/--property-name is required/);
+    // Setup still open: the token is needed.
+    const noToken = await node(SMOKE, ['--api', api, '--email', 'smoke@hotel.test', '--property-name', PROPERTY], PASSWORD_ENV);
+    expect(noToken.code).toBe(1);
+    expect(noToken.stdout).toMatch(/^FAIL setup status: setup is open; --setup-token is required/m);
+    expect(activations()).toBe(0);
   });
 });
 

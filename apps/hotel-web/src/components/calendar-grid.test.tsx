@@ -217,6 +217,38 @@ describe('CalendarGrid', () => {
     expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ stayId: 's9', reservationId: 'r9', version: 4 }), U102);
   });
 
+  it('housekeeping (no guest data from the API): bars show "Zauzeto", are not links, and nothing can be assigned', () => {
+    const { onAssign } = setup({
+      units: [
+        {
+          id: U101,
+          name: 'Soba 101',
+          unitTypeId: DBL,
+          cleanliness: 'clean',
+          bars: [
+            { kind: 'stay', stayId: 's1', reservationId: null, number: null, guest: null, arrival: '2026-11-03', departure: '2026-11-06', status: 'expected' },
+          ],
+        },
+        { id: U102, name: 'Soba 102', unitTypeId: DBL, cleanliness: 'dirty', bars: [] },
+      ],
+      unassigned: [
+        { stayId: 's9', reservationId: null, number: null, guest: null, unitTypeId: DBL, arrival: '2026-11-07', departure: '2026-11-09', version: null },
+      ],
+    });
+    // No link anywhere: a click would only lead to a 403.
+    expect(screen.queryAllByRole('link')).toEqual([]);
+    const bars = screen.getAllByTitle('Zauzeto');
+    expect(bars).toHaveLength(2);
+    expect(bars[0].style.gridColumn).toBe('4 / span 3');
+    for (const bar of bars) expect(bar).not.toHaveAttribute('draggable', 'true');
+    fireEvent.dragStart(bars[1]);
+    fireEvent.dragOver(screen.getByRole('row', { name: 'Soba 102' }));
+    fireEvent.drop(screen.getByRole('row', { name: 'Soba 102' }));
+    expect(onAssign).not.toHaveBeenCalled();
+    // The unassigned list has no assign controls for such a stay.
+    expect(screen.queryByRole('button', { name: 'Dodeli' })).toBeNull();
+  });
+
   it('read only (safe mode): no drag, no assign, no new reservation from a cell; bars still shown', () => {
     const { onAssign } = setup({}, true);
     expect(screen.getByRole('link', { name: /R-2026-000001/ })).toBeInTheDocument();

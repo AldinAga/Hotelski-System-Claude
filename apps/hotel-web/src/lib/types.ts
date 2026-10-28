@@ -47,9 +47,10 @@ export type CalendarBar =
   | {
       kind: 'stay';
       stayId: string;
-      reservationId: string;
-      number: string;
-      guest: string;
+      /** reservationId, number and guest are null for housekeeping (no guest data). */
+      reservationId: string | null;
+      number: string | null;
+      guest: string | null;
       arrival: string;
       departure: string;
       status: string;
@@ -58,14 +59,15 @@ export type CalendarBar =
 
 export interface UnassignedStay {
   stayId: string;
-  reservationId: string;
-  number: string;
-  guest: string;
+  /** reservationId, number, guest and version are null for housekeeping (no guest data). */
+  reservationId: string | null;
+  number: string | null;
+  guest: string | null;
   unitTypeId: string;
   arrival: string;
   departure: string;
   /** The reservation's version when the calendar was read: sent with assign-unit. */
-  version: number;
+  version: number | null;
 }
 
 export interface CalendarView {

@@ -1,10 +1,12 @@
 import type { INestApplication, Type } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../src/app.module';
 import { CLOCK, type Clock } from '../src/common/clock';
 import { DomainErrorFilter } from '../src/common/domain-error';
 import { PropertyContext } from '../src/common/property-context';
+import { configureHttp, HTTP_OPTIONS } from '../src/http';
 import { PG_POOL } from '../src/db/tokens';
 import { LicenceService } from '../src/licensing/licence.service';
 import { LICENSING_CONFIG, type LicensingConfig } from '../src/licensing/licensing.config';
@@ -17,6 +19,8 @@ export interface TestAppOptions {
   licensing?: LicensingConfig;
   /** Replaces the authentication clock. */
   clock?: Clock;
+  /** Environment for the HTTP hardening (HOTEL_WEB_ORIGIN, src/http.ts); defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 export interface TestApp {
@@ -31,7 +35,7 @@ export interface TestApp {
 }
 
 // Boots the application on the worker's test database, wired like main.ts
-// (same global filter). The app runs on testDb's pool: closing the app ends it.
+// (same HTTP hardening and global filter). The app runs on testDb's pool: closing the app ends it.
 export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp> {
   const testDb = await createTestDb();
   let builder = Test.createTestingModule({
@@ -43,7 +47,8 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
   if (opts.licensing) builder = builder.overrideProvider(LICENSING_CONFIG).useValue(opts.licensing);
   if (opts.clock) builder = builder.overrideProvider(CLOCK).useValue(opts.clock);
   const moduleRef = await builder.compile();
-  const app = moduleRef.createNestApplication();
+  const app = moduleRef.createNestApplication<NestExpressApplication>(HTTP_OPTIONS);
+  configureHttp(app, opts.env ?? process.env);
   app.useGlobalFilters(new DomainErrorFilter());
   await app.init();
   return {

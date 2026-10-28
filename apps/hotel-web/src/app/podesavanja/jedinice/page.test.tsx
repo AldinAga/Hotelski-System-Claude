@@ -199,4 +199,34 @@ describe('/podesavanja/jedinice', () => {
     await vi.waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true));
     expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ code: 'SGL', name: { sr: 'Jednokrevetna' }, capacity: 1 });
   });
+
+  describe('roles (the API changes units and blocks for owner and manager only)', () => {
+    const me = (role: string) => ({ 'GET /api/auth/me': { body: { id: 'u', email: 'x@hotel.test', name: 'X', role } } });
+    const changeControls = () => [
+      screen.queryAllByRole('button', { name: 'Izmeni' }).length,
+      screen.queryAllByRole('button', { name: 'Isključi' }).length,
+      screen.queryAllByRole('button', { name: 'Dodaj blokadu' }).length,
+      screen.queryAllByRole('button', { name: /^Ukloni blokadu/ }).length,
+      screen.queryAllByRole('form', { name: /^(Novi tip jedinice|Nova jedinica)$/ }).length,
+    ];
+
+    it('a manager gets the change controls', async () => {
+      mockFetch(routes(me('manager')));
+      render(<UnitsPage />);
+      await screen.findByRole('listitem', { name: 'Soba 101' });
+      await vi.waitFor(() => expect(changeControls()).toEqual([2, 2, 1, 1, 2]));
+    });
+
+    for (const role of ['receptionist', 'housekeeping']) {
+      it(`${role} sees types, units and blocks but no change controls`, async () => {
+        const calls = mockFetch(routes(me(role)));
+        render(<UnitsPage />);
+        const unitRow = await screen.findByRole('listitem', { name: 'Soba 101' });
+        expect(within(unitRow).getByText('10.11.2026 – 11.11.2026 · Održavanje')).toBeInTheDocument();
+        await vi.waitFor(() => expect(changeControls()).toEqual([0, 0, 0, 0, 0]));
+        expect(screen.getByText('Jedinice i blokade menja vlasnik ili menadžer.')).toBeInTheDocument();
+        expect(calls.filter((c) => c.method !== 'GET')).toEqual([]);
+      });
+    }
+  });
 });

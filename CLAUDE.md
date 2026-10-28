@@ -77,7 +77,21 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
   i `/health` vraća 503.
 - **Staging adrese:** API `http://192.168.1.199:4200` (`/health`), recepcija `http://192.168.1.199:4201`.
   Kod za prvo podešavanje: `docker logs hotel-api-claude 2>&1 | grep "Kod za prvo podešavanje"`.
-  Smoke na svežoj instalaciji: `node scripts/smoke-1a.mjs --api http://192.168.1.199:4200 --setup-token … --code …`.
+  Smoke (koraci 4–6 plana, sa vlasnikom): `HOTEL_SMOKE_PASSWORD=… node scripts/smoke-1a.mjs --api http://192.168.1.199:4200
+  --email <pravi email vlasnika> --property-name "<pravo ime objekta>" --setup-token … --code … --totp-out ./owner-totp.txt`.
+  Nastavljiv je: čita `/setup/status` i preskače urađeno (aktivacija je jednokratna, baze se ne prave ponovo);
+  posle završenog podešavanja prijavljuje vlasnika sa `--totp <kod>` ili `--totp-file owner-totp.txt` umesto da ga pravi.
+  Ostavlja prave podatke: ime objekta i vlasnika (nema podrazumevanih), tip i cenovnik `SMOKE` (jedinice S-1, S-2) i
+  otkazane rezervacije. TOTP URI nikad ne ispisuje. Plan u Admin Panelu (korak 4) mora imati limite `rooms` **i**
+  `users` (bez `users` je `POST /users` 403 `limit_exceeded`); ručna provera (korak 6) nema „aktivaciju", jer je
+  smoke već aktivirao instalaciju. Ugovor i podešavanje vlasnika: `docs/contracts/admin-panel.md`.
+- **CSRF:** API prima samo JSON tela (ostalo je 415) i odbija POST/PUT/PATCH/DELETE kad `Origin` (ili, bez njega,
+  `Sec-Fetch-Site`) pokazuje tuđu adresu (403 `origin_refused`), jer SameSite ne razlikuje portove na istom hostu
+  (Admin Panel, POS, Portainer). Bez `HOTEL_WEB_ORIGIN` dozvoljen je samo `Origin` jednak hostu kome je zahtev
+  poslat (kroz Next rewrite to je `X-Forwarded-Host`, tj. adresa recepcije); sa njim samo navedeni origin-i
+  (lista sa zarezima). Skripte i klijenti bez `Origin` i `Sec-Fetch-Site` prolaze. Produkcija dobija svoj hostname.
+- **Secure kolačić:** API veruje `X-Forwarded-Proto` od proksija sa privatnih adresa (trust proxy), pa je kolačić
+  `Secure` kad recepcija radi preko HTTPS-a; HTTP na LAN-u (staging) ostaje kako jeste.
 - **Manifest proizvoda:** `product/manifest.json`; objava `CENTRAL_ADMIN_URL=http://192.168.1.199:4100
   HOTEL_PUBLISHER_TOKEN=… node scripts/publish-manifest.mjs` (servisni token `product_publisher`,
   samo uz odobrenje korisnika; svaka izmena manifesta traži veću `version`).

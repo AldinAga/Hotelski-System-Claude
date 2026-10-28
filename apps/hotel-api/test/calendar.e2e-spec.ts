@@ -285,6 +285,47 @@ describe('front-desk calendar (e2e)', () => {
       expect((await request(server()).get('/calendar?from=2026-11-02&to=2026-11-05')).status).toBe(401);
     });
 
+    it('housekeeping sees occupancy but no guest name, reservation number or reservation link', async () => {
+      const plan = await createPlan();
+      const dbl = await pricedType('DBL', 2, plan);
+      const assigned = await book(plan, { unitId: dbl.unitIds[0] }, '2026-11-03', '2026-11-05');
+      const loose = await book(plan, { unitTypeId: dbl.typeId }, '2026-11-03', '2026-11-04');
+      const hk = await sessionCookieFor(app, (await seedUser(ta.testDb, 'housekeeping')).id);
+
+      // Control: the front desk gets the details for the same range.
+      const desk = await calendar('2026-11-02', '2026-11-06');
+      const deskBar = desk.body.units.find((u: { id: string }) => u.id === dbl.unitIds[0]).bars[0];
+      expect(deskBar).toMatchObject({ reservationId: assigned.reservationId, number: assigned.number, guest: 'Petar Petrović' });
+      expect(desk.body.unassigned[0]).toMatchObject({ reservationId: loose.reservationId, number: loose.number });
+
+      const res = await calendar('2026-11-02', '2026-11-06', hk);
+      expect(res.status).toBe(200);
+      const bar = res.body.units.find((u: { id: string }) => u.id === dbl.unitIds[0]).bars[0];
+      expect(bar).toEqual({
+        kind: 'stay',
+        stayId: expect.any(String),
+        reservationId: null,
+        number: null,
+        guest: null,
+        arrival: '2026-11-03',
+        departure: '2026-11-05',
+        status: 'expected',
+      });
+      expect(res.body.unassigned).toEqual([
+        {
+          stayId: expect.any(String),
+          reservationId: null,
+          number: null,
+          guest: null,
+          unitTypeId: dbl.typeId,
+          arrival: '2026-11-03',
+          departure: '2026-11-04',
+          version: null,
+        },
+      ]);
+      expect(JSON.stringify(res.body)).not.toMatch(/Petrovi|R-\d{4}/);
+    });
+
     it('works in safe mode', async () => {
       await ta.reset();
       await activate({ expiry_mode: 'safe_mode' });
