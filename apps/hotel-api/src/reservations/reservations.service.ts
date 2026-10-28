@@ -252,6 +252,14 @@ function pgCause(err: unknown): { constraint?: string } {
 }
 
 type UnitRow = { id: string; unit_type_id: string | null; active: boolean };
+type StayPlan = { i: number; s: BookStayInput; scope: Scope; unitTypeId: string | null };
+type PricedStay = StayPlan & { nights: Array<{ day: string; priceMinor: number }> };
+
+/** POST /reservations/quote: the price book would store, per stay and in total. */
+export interface QuoteView {
+  stays: Array<{ nights: Array<{ day: string; priceMinor: number }>; totalMinor: number }>;
+  totalMinor: number;
+}
 type StayRow = {
   id: string;
   reservation_id: string;
@@ -314,38 +322,8 @@ export class ReservationsService {
       if (existing) return existing;
     }
 
-    // 1. Dates, before anything is locked or priced.
-    const today = await this.inventory.today(tx, propertyId);
-    data.stays.forEach((s, i) => {
-      const r = validateStayDates(s.arrival, s.departure, today);
-      if (!r.ok) throw new DomainError(r.reason, STAY_DATE_MESSAGES[r.reason], 422, { field: r.field, stay: i });
-    });
-
-    // 2. Units named by a stay: locked by id, then checked (the same row
-    //    UnitBlocksService locks before checking its stays).
-    const units = new Map<string, UnitRow>();
-    for (const unitId of [...new Set(data.stays.flatMap((s) => (s.unitId ? [s.unitId] : [])))].sort()) {
-      const { rows } = await tx.execute<UnitRow>(
-        sql`SELECT id, unit_type_id, active FROM unit WHERE id = ${unitId} AND property_id = ${propertyId} FOR UPDATE`,
-      );
-      if (!rows[0]) throw unitNotFound({ unitId });
-      units.set(unitId, rows[0]);
-    }
-    const plan = data.stays.map((s, i): { i: number; s: BookStayInput; scope: Scope; unitTypeId: string | null } => {
-      if (!s.unitId) return { i, s, scope: { kind: 'unit_type', id: s.unitTypeId! }, unitTypeId: s.unitTypeId! };
-      const u = units.get(s.unitId)!;
-      if (s.unitTypeId && s.unitTypeId !== u.unit_type_id) {
-        throw new DomainError('unit_type_mismatch', 'Jedinica nije navedenog tipa.', 422, { stay: i, unitId: s.unitId });
-      }
-      return { i, s, scope: scopeFor(s.unitId, u.unit_type_id), unitTypeId: u.unit_type_id };
-    });
-    for (const { i, s } of plan) {
-      if (!s.unitId) continue;
-      if (!units.get(s.unitId)!.active) {
-        throw new DomainError('unit_inactive', 'Jedinica je isključena.', 409, { stay: i, unitId: s.unitId });
-      }
-      await this.assertNotBlocked(tx, propertyId, s.unitId, s.arrival, s.departure, i);
-    }
+    // 1–2. Dates, then the units named by a stay, locked.
+    const plan = await this.checkStays(tx, propertyId, data, 'lock');
 
     // 3. Inventory: sold + 1 for every night, scopes in scopeOrder.
     for (const p of inventoryOrder(plan.map((p) => ({ ...p, arrival: p.s.arrival })))) {
@@ -353,15 +331,7 @@ export class ReservationsService {
     }
 
     // 4. Prices, as agreed now.
-    const priced: Array<(typeof plan)[number] & { nights: Array<{ day: string; priceMinor: number }> }> = [];
-    for (const p of plan) {
-      const q = await this.rates.quote(tx, propertyId, p.s.ratePlanId, p.scope, p.s.arrival, p.s.departure);
-      if (!q.ok) {
-        const message = q.reason === 'closed' ? `Noć ${q.day} je zatvorena za prodaju.` : `Nema cene za noć ${q.day}.`;
-        throw new DomainError(q.reason, message, 422, { day: q.day, stay: p.i });
-      }
-      priced.push({ ...p, nights: q.nights.map((n) => ({ day: n.day, priceMinor: n.price.amount_minor })) });
-    }
+    const priced = await this.priceStays(tx, propertyId, plan);
 
     // 5. Rows: guest, number, reservation, stays and their nights.
     const h = data.holder;
@@ -419,6 +389,86 @@ export class ReservationsService {
       },
     });
     return { reservationId, number };
+  }
+
+  // ---- quote ----
+
+  /**
+   * What book would charge for the same body, without booking: the same
+   * parsing, date rules (validateStayDates) and unit checks, then
+   * RatesService.quote per stay. Inside a read-only transaction, so nothing
+   * is written: no inventory_day rows, no number, no audit. Availability is
+   * not reserved or checked here; book answers no_availability itself.
+   */
+  async quote(input: unknown): Promise<QuoteView> {
+    const data = parseBookInput(input);
+    const propertyId = await this.property.id();
+    return this.db.transaction(
+      async (tx) => {
+        const plan = await this.checkStays(tx, propertyId, data, 'read');
+        const stays = (await this.priceStays(tx, propertyId, plan)).map((p) => ({
+          nights: p.nights,
+          totalMinor: p.nights.reduce((sum, n) => sum + n.priceMinor, 0),
+        }));
+        return { stays, totalMinor: stays.reduce((sum, s) => sum + s.totalMinor, 0) };
+      },
+      { accessMode: 'read only' },
+    );
+  }
+
+  /**
+   * Steps shared by book and quote, in book's order. 1: the date rules of
+   * every stay, before anything is locked or priced. 2: the units named by a
+   * stay, read by id (FOR UPDATE when booking: the same row UnitBlocksService
+   * locks before checking its stays), then type, active and block checks.
+   * Returns each stay with its inventory scope.
+   */
+  private async checkStays(tx: Tx, propertyId: string, data: BookInput, mode: 'lock' | 'read'): Promise<StayPlan[]> {
+    const today = await this.inventory.today(tx, propertyId);
+    data.stays.forEach((s, i) => {
+      const r = validateStayDates(s.arrival, s.departure, today);
+      if (!r.ok) throw new DomainError(r.reason, STAY_DATE_MESSAGES[r.reason], 422, { field: r.field, stay: i });
+    });
+
+    const units = new Map<string, UnitRow>();
+    for (const unitId of [...new Set(data.stays.flatMap((s) => (s.unitId ? [s.unitId] : [])))].sort()) {
+      const { rows } = await tx.execute<UnitRow>(
+        sql`SELECT id, unit_type_id, active FROM unit WHERE id = ${unitId} AND property_id = ${propertyId}
+            ${mode === 'lock' ? sql`FOR UPDATE` : sql``}`,
+      );
+      if (!rows[0]) throw unitNotFound({ unitId });
+      units.set(unitId, rows[0]);
+    }
+    const plan = data.stays.map((s, i): StayPlan => {
+      if (!s.unitId) return { i, s, scope: { kind: 'unit_type', id: s.unitTypeId! }, unitTypeId: s.unitTypeId! };
+      const u = units.get(s.unitId)!;
+      if (s.unitTypeId && s.unitTypeId !== u.unit_type_id) {
+        throw new DomainError('unit_type_mismatch', 'Jedinica nije navedenog tipa.', 422, { stay: i, unitId: s.unitId });
+      }
+      return { i, s, scope: scopeFor(s.unitId, u.unit_type_id), unitTypeId: u.unit_type_id };
+    });
+    for (const { i, s } of plan) {
+      if (!s.unitId) continue;
+      if (!units.get(s.unitId)!.active) {
+        throw new DomainError('unit_inactive', 'Jedinica je isključena.', 409, { stay: i, unitId: s.unitId });
+      }
+      await this.assertNotBlocked(tx, propertyId, s.unitId, s.arrival, s.departure, i);
+    }
+    return plan;
+  }
+
+  /** Every stay priced on its plan; the first night that cannot be sold refuses the whole request. */
+  private async priceStays(tx: Tx, propertyId: string, plan: StayPlan[]): Promise<PricedStay[]> {
+    const priced: PricedStay[] = [];
+    for (const p of plan) {
+      const q = await this.rates.quote(tx, propertyId, p.s.ratePlanId, p.scope, p.s.arrival, p.s.departure);
+      if (!q.ok) {
+        const message = q.reason === 'closed' ? `Noć ${q.day} je zatvorena za prodaju.` : `Nema cene za noć ${q.day}.`;
+        throw new DomainError(q.reason, message, 422, { day: q.day, stay: p.i });
+      }
+      priced.push({ ...p, nights: q.nights.map((n) => ({ day: n.day, priceMinor: n.price.amount_minor })) });
+    }
+    return priced;
   }
 
   private async findExternal(tx: Tx, propertyId: string, data: BookInput): Promise<BookResult | null> {

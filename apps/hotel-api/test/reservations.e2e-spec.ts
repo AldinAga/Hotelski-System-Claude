@@ -394,6 +394,117 @@ describe('reservations (e2e)', () => {
     });
   });
 
+  describe('quote', () => {
+    const quote = (stays: object[], cookie = receptionist) =>
+      post('/reservations/quote', { source: 'front_desk', holder, stays }, cookie);
+
+    /** Everything a booking writes, to show a quote writes none of it. */
+    async function footprint() {
+      const { rows } = await ta.testDb.pool.query<{ sold: number; blocked: number; total: number }>(
+        `SELECT coalesce(sum(sold), 0)::int AS sold, coalesce(sum(blocked), 0)::int AS blocked,
+                coalesce(sum(total), 0)::int AS total FROM inventory_day`,
+      );
+      const { rows: counter } = await ta.testDb.pool.query(`SELECT year, last FROM reservation_counter ORDER BY year`);
+      return {
+        ledger: rows[0],
+        counter,
+        tables: Object.fromEntries(
+          await Promise.all(
+            ['inventory_day', 'reservation', 'stay', 'stay_night', 'guest', 'audit_log'].map(
+              async (t) => [t, await count(t)] as const,
+            ),
+          ),
+        ),
+      };
+    }
+
+    it('quote ne menja sold: prices every stay and writes nothing (no inventory_day, counter or audit)', async () => {
+      const plan = await createPlan('BAR', { discount7Pct: 10 });
+      const dbl = await pricedType('DBL', 1, plan, 1_000_000);
+      const sgl = await pricedType('SGL', 1, plan, 600_000);
+      // One real booking, so the ledger, counter and audit are not empty.
+      expect((await book([stay(plan, { unitTypeId: dbl.typeId }, '2026-12-01', '2026-12-03')])).status).toBe(201);
+      const before = await footprint();
+      expect(before.ledger.sold).toBe(2);
+      expect(before.counter).toEqual([{ year: 2026, last: 1 }]);
+
+      const res = await quote([
+        // Same nights as the booking (the stored days) and nights never touched (no rows yet).
+        stay(plan, { unitTypeId: sgl.typeId }, '2026-12-01', '2026-12-03'),
+        stay(plan, { unitId: sgl.unitIds[0] }, '2027-01-10', '2027-01-17'),
+      ]);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        stays: [
+          {
+            nights: [
+              { day: '2026-12-01', priceMinor: 600_000 },
+              { day: '2026-12-02', priceMinor: 600_000 },
+            ],
+            totalMinor: 1_200_000,
+          },
+          {
+            // 7 nights: the plan's 10% applies, as book would store it.
+            nights: [10, 11, 12, 13, 14, 15, 16].map((d) => ({ day: `2027-01-${d}`, priceMinor: 540_000 })),
+            totalMinor: 3_780_000,
+          },
+        ],
+        totalMinor: 4_980_000,
+      });
+      expect(await footprint()).toEqual(before);
+    });
+
+    it('prošli dolazak → 422 arrival_in_past, checked before pricing (no price needed)', async () => {
+      const plan = await createPlan();
+      const dbl = await pricedType('DBL', 1, plan);
+      // 2026-10-30 has no price: the date rule must answer first.
+      const res = await quote([stay(plan, { unitTypeId: dbl.typeId }, '2026-10-30', '2026-11-03')]);
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ code: 'arrival_in_past', details: { field: 'arrival', stay: 0 } });
+    });
+
+    it('the same refusals as book: price_missing and closed name the day, bad shape is validation_failed', async () => {
+      const plan = await createPlan();
+      const dbl = await pricedType('DBL', 1, plan);
+      await ta.testDb.pool.query(`DELETE FROM rate_day WHERE scope_id = $1 AND day = '2027-01-12'`, [dbl.typeId]);
+      const missing = await quote([stay(plan, { unitTypeId: dbl.typeId }, '2027-01-10', '2027-01-14')]);
+      expect(missing.status).toBe(422);
+      expect(missing.body).toMatchObject({ code: 'price_missing', details: { day: '2027-01-12', stay: 0 } });
+
+      const tooLong = await quote([stay(plan, { unitTypeId: dbl.typeId }, '2026-12-01', '2027-12-02')]);
+      expect(tooLong.status).toBe(422);
+      expect(tooLong.body.code).toBe('too_long');
+
+      const noTarget = await quote([{ arrival: '2026-12-01', departure: '2026-12-02', adults: 2, ratePlanId: plan }]);
+      expect(noTarget.status).toBe(422);
+      expect(noTarget.body.code).toBe('validation_failed');
+    });
+
+    it('a blocked or inactive unit is refused as book would refuse it', async () => {
+      const plan = await createPlan();
+      const dbl = await pricedType('DBL', 2, plan);
+      const [u1, u2] = dbl.unitIds;
+      expect((await post(`/units/${u1}/blocks`, { from: '2026-12-02', to: '2026-12-04', reason: 'maintenance' }, manager)).status).toBe(201);
+      const blocked = await quote([stay(plan, { unitId: u1 }, '2026-12-01', '2026-12-03')]);
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.code).toBe('unit_blocked');
+
+      expect((await patch(`/units/${u2}`, { active: false })).status).toBe(200);
+      const inactive = await quote([stay(plan, { unitId: u2 }, '2026-12-01', '2026-12-03')]);
+      expect(inactive.status).toBe(409);
+      expect(inactive.body.code).toBe('unit_inactive');
+    });
+
+    it('housekeeping cannot quote: 403 forbidden_role', async () => {
+      const hk = await sessionCookieFor(app, (await seedUser(ta.testDb, 'housekeeping')).id);
+      const plan = await createPlan();
+      const dbl = await pricedType('DBL', 1, plan);
+      const res = await quote([stay(plan, { unitTypeId: dbl.typeId }, '2026-12-01', '2026-12-02')], hk);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden_role');
+    });
+  });
+
   describe('blocks against stays', () => {
     it('a block over an existing stay of the unit: 409 unit_occupied; next to it is fine', async () => {
       const plan = await createPlan();
@@ -662,6 +773,14 @@ describe('reservations (e2e)', () => {
       }
       expect((await get('/reservations')).status).toBe(200);
       expect((await get(`/reservations/${a.body.reservationId}`)).status).toBe(200);
+      // A quote reads only (reservation.view), so it still answers in safe mode.
+      const q = await post('/reservations/quote', {
+        source: 'front_desk',
+        holder,
+        stays: [stay(plan, { unitTypeId: dbl.typeId }, '2027-12-20', '2027-12-21')],
+      });
+      expect(q.status).toBe(200);
+      expect(q.body.totalMinor).toBe(1_000_000);
     });
   });
 

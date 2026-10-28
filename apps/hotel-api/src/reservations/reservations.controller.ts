@@ -7,6 +7,7 @@ import {
   ReservationsService,
   type BookInput,
   type BookResult,
+  type QuoteView,
   type ReservationSummary,
   type ReservationView,
 } from './reservations.service';
@@ -24,6 +25,15 @@ export class ReservationsController {
   book(@CurrentUser() actor: AuthUser, @Body() body: unknown): Promise<BookResult> {
     // book checks the shape itself (parseBookInput), whoever calls it.
     return this.reservations.book(body as BookInput, actor);
+  }
+
+  // The price book would charge, for the same body; reads only, so it is a
+  // view action and keeps working in safe mode.
+  @Post('quote')
+  @HttpCode(200)
+  @LicensedAction('hotel.core', 'reservation.view')
+  quote(@Body() body: unknown): Promise<QuoteView> {
+    return this.reservations.quote(body);
   }
 
   @Get()

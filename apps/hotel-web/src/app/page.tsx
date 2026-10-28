@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-// Until the front-desk calendar exists, the start page is unit setup.
+// The front desk starts on the calendar.
 export default function Home(): never {
-  redirect('/podesavanja/jedinice');
+  redirect('/kalendar');
 }

@@ -19,7 +19,7 @@ const CALENDAR = {
       unitTypeId: TYPE.id,
       cleanliness: 'clean',
       bars: [
-        { kind: 'stay', stayId: 's', reservationId: 'r', number: 'R-1', guest: 'Gost', arrival: '2026-11-02', departure: '2026-11-04', status: 'booked' },
+        { kind: 'stay', stayId: 's', reservationId: 'r', number: 'R-1', guest: 'Gost', arrival: '2026-11-02', departure: '2026-11-04', status: 'expected' },
         { kind: 'block', blockId: BLOCK_ID, from: '2026-11-10', to: '2026-11-12', reason: 'maintenance' },
       ],
     },

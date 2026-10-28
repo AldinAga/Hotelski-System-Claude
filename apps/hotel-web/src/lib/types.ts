@@ -38,14 +38,95 @@ export interface UnitBlock {
   reason: BlockReason;
 }
 
+/**
+ * GET /calendar bars are clipped by the API to the requested range: a stay
+ * that began earlier arrives as the first day, so the real dates are on the
+ * reservation page.
+ */
 export type CalendarBar =
-  | { kind: 'stay'; stayId: string; arrival: string; departure: string }
+  | {
+      kind: 'stay';
+      stayId: string;
+      reservationId: string;
+      number: string;
+      guest: string;
+      arrival: string;
+      departure: string;
+      status: string;
+    }
   | { kind: 'block'; blockId: string; from: string; to: string; reason: BlockReason };
+
+export interface UnassignedStay {
+  stayId: string;
+  reservationId: string;
+  number: string;
+  guest: string;
+  unitTypeId: string;
+  arrival: string;
+  departure: string;
+}
 
 export interface CalendarView {
   days: string[];
-  units: Array<{ id: string; name: string; unitTypeId: string | null; bars: CalendarBar[] }>;
+  availability: Array<{ scope: Scope; label: string; free: number[] }>;
+  units: Array<{ id: string; name: string; unitTypeId: string | null; cleanliness: string; bars: CalendarBar[] }>;
+  unassigned: UnassignedStay[];
 }
+
+export type ReservationStatus = 'requested' | 'confirmed' | 'cancelled' | 'no_show';
+export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled';
+
+export interface PricedNight {
+  day: string;
+  priceMinor: number;
+}
+
+export interface Reservation {
+  id: string;
+  number: string;
+  status: ReservationStatus;
+  source: string;
+  channel: string | null;
+  externalId: string | null;
+  note: string | null;
+  version: number;
+  createdAt: string;
+  holder: { id: string; firstName: string; lastName: string; email: string | null; phone: string | null; language: string };
+  stays: Array<{
+    id: string;
+    unitTypeId: string | null;
+    unitId: string | null;
+    arrival: string;
+    departure: string;
+    adults: number;
+    children: number;
+    ratePlanId: string;
+    status: StayStatus;
+    nights: PricedNight[];
+    totalMinor: number;
+  }>;
+  totalMinor: number;
+}
+
+/** POST /reservations/quote */
+export interface Quote {
+  stays: Array<{ nights: PricedNight[]; totalMinor: number }>;
+  totalMinor: number;
+}
+
+export const RESERVATION_STATUS_LABELS: Record<ReservationStatus, string> = {
+  requested: 'Na upitu',
+  confirmed: 'Potvrđena',
+  cancelled: 'Otkazana',
+  no_show: 'Gost nije došao',
+};
+
+export const STAY_STATUS_LABELS: Record<StayStatus, string> = {
+  expected: 'Očekuje se',
+  in_house: 'U objektu',
+  checked_out: 'Odjavljen',
+  cancelled: 'Otkazan',
+};
 
 export type Board = 'RO' | 'BB' | 'HB' | 'FB';
 

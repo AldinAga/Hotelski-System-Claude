@@ -72,7 +72,7 @@ export const MESSAGES: Record<string, string> = {
   range_too_long: 'Opseg može imati najviše {max} dana.',
   scope_not_priced: 'Jedinica ima tip; cene se unose za tip jedinice.',
 
-  // reservations (front desk, used from the next screens on)
+  // reservations (front desk: calendar, new reservation, reservation page)
   no_availability: 'Nema slobodnih jedinica za {day}.',
   price_missing: 'Za {day} nije uneta cena.',
   closed: 'Dan {day} je zatvoren za prodaju.',
@@ -80,6 +80,14 @@ export const MESSAGES: Record<string, string> = {
   departure_not_after_arrival: 'Datum odlaska mora biti posle datuma dolaska.',
   arrival_in_past: 'Datum dolaska ne može biti u prošlosti.',
   too_long: 'Boravak može trajati najviše 365 noći.',
+  unit_taken: 'Jedinica je već zauzeta u tom periodu.',
+  unit_blocked: 'Jedinica je blokirana u tom periodu.',
+  unit_type_mismatch: 'Jedinica nije rezervisanog tipa.',
+  reservation_not_found: 'Rezervacija ne postoji. Osvežite stranicu.',
+  reservation_not_cancellable: 'Rezervacija se ne može otkazati u ovom stanju.',
+  stay_not_found: 'Boravak ne postoji. Osvežite stranicu.',
+  stay_not_assignable: 'Boravku se ne može dodeliti jedinica u ovom stanju.',
+  version_conflict: 'Rezervaciju je u međuvremenu neko izmenio. Osvežite prikaz i pokušajte ponovo.',
 };
 
 /** Field names in validation_failed details, as the forms label them. */
@@ -104,7 +112,27 @@ const FIELD_LABELS: Record<string, string> = {
   propertyName: 'Naziv objekta',
   legalKind: 'Pravni oblik',
   setupToken: 'Kod za prvo podešavanje',
+  source: 'Izvor',
+  channel: 'Kanal',
+  'holder.firstName': 'Ime',
+  'holder.lastName': 'Prezime',
+  'holder.email': 'E-adresa',
+  'holder.phone': 'Telefon',
+  'holder.language': 'Jezik',
+  stays: 'Boravci',
+  arrival: 'Dolazak',
+  departure: 'Odlazak',
+  adults: 'Odrasli',
+  children: 'Deca',
+  ratePlanId: 'Cenovnik',
+  unitId: 'Jedinica',
+  version: 'Verzija',
 };
+
+/** "stays[0].adults" → "adults": the forms show one stay at a time. */
+function fieldLabel(field: string): string {
+  return FIELD_LABELS[field] ?? FIELD_LABELS[field.replace(/^stays\[\d+\]\./, '')] ?? field;
+}
 
 function fill(template: string, details: Record<string, unknown> | null): string | null {
   let missing = false;
@@ -114,7 +142,7 @@ function fill(template: string, details: Record<string, unknown> | null): string
       missing = true;
       return '';
     }
-    if (key === 'field') return FIELD_LABELS[String(v)] ?? String(v);
+    if (key === 'field') return fieldLabel(String(v));
     if (key === 'day' && typeof v === 'string') return formatDate(v);
     return String(v);
   });

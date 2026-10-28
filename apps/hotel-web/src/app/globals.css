@@ -282,3 +282,157 @@ code.secret {
   background: var(--selected);
   border-color: var(--accent);
 }
+
+/* Front-desk calendar: scrolls sideways inside its box, never the page. */
+main.wide {
+  max-width: 1400px;
+}
+
+.head-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cal-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.cal {
+  display: grid;
+  gap: 2px;
+  min-width: max-content;
+}
+
+.cal-row {
+  display: grid;
+  gap: 2px;
+  min-height: 40px;
+  align-items: stretch;
+}
+
+.cal-row.drop {
+  outline: 2px dashed var(--accent);
+}
+
+.cal-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-day {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 4px 0;
+}
+
+.cal-cell {
+  min-height: 40px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.cal-cell:hover:not(:disabled) {
+  background: var(--selected);
+}
+
+.cal-cell:disabled {
+  opacity: 1;
+}
+
+.bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.bar-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar.stay {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.bar.stay.status-in_house {
+  background: #157347;
+}
+
+.bar.stay.unassigned {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  cursor: grab;
+}
+
+.bar.block {
+  background: var(--closed);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+/* The stay or block goes on beyond the shown days. */
+.bar.cont-before {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 3px dashed var(--text);
+}
+
+.bar.cont-after {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 3px dashed var(--text);
+}
+
+.cal-free {
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 4px 0;
+  color: var(--muted);
+}
+
+.cal-free.full {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+table.nights {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 360px;
+}
+
+table.nights td {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+table.nights td.num {
+  text-align: right;
+}

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiError, mockFetch } from '@/test/fetch-mock';
 import { api, ApiError, checkSetup, navigation } from './api';
@@ -89,5 +91,35 @@ describe('messageFor', () => {
     for (const code of ['unit_has_blocks', 'unit_has_stays', 'inventory_conflict', 'scope_not_priced', 'setup_token_invalid']) {
       expect(MESSAGES[code], code).toBeTruthy();
     }
+  });
+
+  it('covers every code the reservation screens can receive, read from the API source', () => {
+    const api = resolve(__dirname, '../../../hotel-api/src');
+    const codes = new Set<string>();
+    for (const file of [
+      'reservations/reservations.service.ts',
+      'reservations/stay-dates.ts',
+      'inventory/inventory.service.ts',
+      'rates/rates.service.ts',
+      'rates/quote.ts',
+      'common/input.ts',
+    ]) {
+      const text = readFileSync(resolve(api, file), 'utf8');
+      for (const m of text.matchAll(/DomainError\(\s*'([a-z_]+)'/g)) codes.add(m[1]);
+      // Reasons returned as values and thrown by the caller (stay dates, quote).
+      for (const m of text.matchAll(/reason: '([a-z_]+)'/g)) codes.add(m[1]);
+    }
+    // A floor, so a broken pattern cannot pass with nothing found.
+    expect(codes.size).toBeGreaterThanOrEqual(20);
+    expect([...codes].filter((c) => !MESSAGES[c])).toEqual([]);
+  });
+
+  it('a stay field in validation_failed is named as the form names it', () => {
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'stays[0].adults' }))).toBe('Proverite polje „Odrasli“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'holder.firstName' }))).toBe('Proverite polje „Ime“.');
+  });
+
+  it('no_availability names the night as D.M.YYYY', () => {
+    expect(messageFor(new ApiError(409, 'no_availability', 'x', { day: '2026-12-02' }))).toBe('Nema slobodnih jedinica za 2.12.2026.');
   });
 });
