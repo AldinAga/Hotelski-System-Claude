@@ -909,6 +909,34 @@ html:has(.portal) body {
   height: 22px;
 }
 
+.back-to-top:focus-visible {
+  outline: 3px solid var(--p-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * Signed-in app: light only, so the button takes the app tokens and drops the
+ * portal glass (whose --p-* tokens turn dark with a dark OS theme). It must
+ * override every --p-* property of .back-to-top above.
+ */
+.back-to-top--app {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: 0 2px 10px rgba(28, 36, 48, 0.16);
+}
+
+.back-to-top--app:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.back-to-top--app:focus-visible {
+  outline-color: var(--accent);
+}
+
 /* No backdrop-filter: a see-through card over the blobs would be hard to read. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .portal-card {

@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
+import { BackToTop } from './back-to-top';
 import { LicenceBanner } from './licence-banner';
 import { NewReservationLink } from './new-reservation-link';
 import { SignOutButton } from './sign-out-button';
 
-/** Top navigation and licence banner of every signed-in screen. */
+/** Top navigation, licence banner and back-to-top button of every signed-in screen. */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <>
@@ -17,6 +18,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
       <LicenceBanner />
       {children}
+      <BackToTop variant="app" />
     </>
   );
 }
