@@ -148,9 +148,9 @@ describe('LicenceGuard', () => {
     }
   });
 
-  it('SAFE_MODE_ALLOWED for 1a is exactly the five view actions', () => {
+  it('SAFE_MODE_ALLOWED is exactly the five 1a view actions plus guest.view', () => {
     expect([...SAFE_MODE_ALLOWED].sort()).toEqual(
-      ['calendar.view', 'rate.view', 'reservation.view', 'unit.view', 'user.view'],
+      ['calendar.view', 'guest.view', 'rate.view', 'reservation.view', 'unit.view', 'user.view'],
     );
   });
 });

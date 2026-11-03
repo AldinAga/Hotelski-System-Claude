@@ -4,6 +4,7 @@ import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { DatabaseModule } from './db/database.module';
+import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
 import { InventoryModule } from './inventory/inventory.module';
 import { LicenceGuard } from './licensing/licence.guard';
@@ -17,7 +18,7 @@ import { UnitsModule } from './units/units.module';
 // the route (@LicensedAction / @Unlicensed). Keep this order: an anonymous
 // caller must get 401, not a licence answer. test/auth.e2e-spec.ts pins it.
 @Module({
-  imports: [DatabaseModule, LicensingModule, AuthModule, InventoryModule, UnitsModule, RatesModule, ReservationsModule, CalendarModule],
+  imports: [DatabaseModule, LicensingModule, AuthModule, InventoryModule, UnitsModule, RatesModule, ReservationsModule, CalendarModule, GuestsModule],
   controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },

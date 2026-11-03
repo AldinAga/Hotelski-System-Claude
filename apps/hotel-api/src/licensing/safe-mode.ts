@@ -11,4 +11,6 @@ export const SAFE_MODE_ALLOWED: ReadonlySet<string> = new Set([
   'unit.view',
   'rate.view',
   'user.view',
+  // 1b: who is staying (the guest list) stays readable after expiry.
+  'guest.view',
 ]);

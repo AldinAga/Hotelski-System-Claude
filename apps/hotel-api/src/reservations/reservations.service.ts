@@ -4,18 +4,17 @@ import { AuditService } from '../common/audit.service';
 import { DomainError } from '../common/domain-error';
 import {
   asBody,
-  EMAIL_MAX,
   isExclusionViolation,
   isUniqueViolation,
   isUuid,
   optionalText,
   requireDate,
-  requireText,
   validationFailed,
   type Body,
 } from '../common/input';
 import { PropertyContext } from '../common/property-context';
 import { DB, type Db, type Tx } from '../db/tokens';
+import { parseGuestInput, stayGuestsOf, type StayGuestView } from '../guests/guests.service';
 import { InventoryService, scopeFor, scopeOrder, type Scope } from '../inventory/inventory.service';
 import { RatesService } from '../rates/rates.service';
 import { validateStayDates, MAX_STAY_NIGHTS, type StayDatesReason } from './stay-dates';
@@ -80,6 +79,8 @@ export interface StayView {
   status: StayStatus;
   nights: Array<{ day: string; priceMinor: number }>;
   totalMinor: number;
+  /** Primary guest first, then in the order they were added (GuestsService). */
+  guests: StayGuestView[];
 }
 
 export interface ReservationView {
@@ -118,8 +119,6 @@ export interface ReservationSummary {
 }
 
 const LIST_LIMIT = 500;
-const LANGUAGE = /^[a-z]{2}$/;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const reservationNotFound = () => new DomainError('reservation_not_found', 'Rezervacija ne postoji.', 404);
 const stayNotFound = () => new DomainError('stay_not_found', 'Boravak ne postoji.', 404);
@@ -145,14 +144,6 @@ function textOf(b: Body, field: string, path: string, max: number): string | und
   }
 }
 
-function requireTextAt(b: Body, field: string, path: string, max: number): string {
-  try {
-    return requireText(b, field, max);
-  } catch {
-    throw validationFailed(path);
-  }
-}
-
 function intIn(v: unknown, min: number, max: number): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 }
@@ -173,14 +164,13 @@ export function parseBookInput(raw: unknown): BookInput {
   if (externalId !== undefined && channel === undefined) {
     throw validationFailed('channel', 'Uz spoljni broj rezervacije mora se navesti kanal.');
   }
-  const h = asBody(b.holder);
-  const firstName = requireTextAt(h, 'firstName', 'holder.firstName', 100);
-  const lastName = requireTextAt(h, 'lastName', 'holder.lastName', 100);
-  const email = textOf(h, 'email', 'holder.email', EMAIL_MAX);
-  if (email !== undefined && !EMAIL.test(email)) throw validationFailed('holder.email');
-  const phone = textOf(h, 'phone', 'holder.phone', 50);
-  const language = textOf(h, 'language', 'holder.language', 2);
-  if (language !== undefined && !LANGUAGE.test(language)) throw validationFailed('holder.language');
+  // The holder follows the field rules of every guest (GuestsService); it has no note.
+  const holder = parseGuestInput(b.holder, 'holder.', { note: false });
+  const firstName = holder.firstName!;
+  const lastName = holder.lastName!;
+  const email = holder.email ?? undefined;
+  const phone = holder.phone ?? undefined;
+  const language = holder.language;
   const note = textOf(b, 'note', 'note', 2000);
 
   if (!Array.isArray(b.stays) || b.stays.length === 0 || b.stays.length > MAX_STAYS) throw validationFailed('stays');
@@ -355,6 +345,10 @@ export class ReservationsService {
                 ${p.s.adults}, ${p.s.children ?? 0}, ${p.s.ratePlanId}, 'expected')
         RETURNING id`);
       const stayId = rows[0].id;
+      // The holder is the primary guest of every stay (spec 5.4).
+      await tx.execute(sql`
+        INSERT INTO stay_guest (property_id, stay_id, guest_id, is_primary)
+        VALUES (${propertyId}, ${stayId}, ${guestRows[0].id}, true)`);
       await tx.execute(sql`
         INSERT INTO stay_night (stay_id, property_id, day, price_minor, rate_plan_id)
         VALUES ${sql.join(
@@ -738,6 +732,7 @@ export class ReservationsService {
           FROM stay_night n JOIN stay s ON s.id = n.stay_id AND s.property_id = n.property_id
          WHERE n.property_id = ${propertyId} AND s.reservation_id = ${id}
          ORDER BY n.day`);
+      const guests = await stayGuestsOf(tx, propertyId, { reservationId: id });
       const stays: StayView[] = stayRows.map((s) => {
         const nights = nightRows
           .filter((n) => n.stay_id === s.id)
@@ -754,6 +749,7 @@ export class ReservationsService {
           status: s.status,
           nights,
           totalMinor: nights.reduce((sum, n) => sum + n.priceMinor, 0),
+          guests: guests.get(s.id) ?? [],
         };
       });
       return {
