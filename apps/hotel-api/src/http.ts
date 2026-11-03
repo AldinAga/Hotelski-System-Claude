@@ -30,6 +30,11 @@ export const JSON_LIMIT = '100kb';
  * front desk reaches the API through the Next rewrite in hotel-web, which
  * runs on the Docker network (a private address). A forged header from a
  * private address can only mark the caller's own cookie Secure.
+ *
+ * "Private" includes every LAN client (192.168.0.0/16 is uniquelocal) and
+ * :4200 listens on all NAS addresses, so X-Forwarded-For, and with it req.ip,
+ * is whatever such a client claims. Nothing may base a security decision on
+ * req.ip: Turnstile therefore sends no remoteip (src/auth/turnstile.ts).
  */
 export const TRUSTED_PROXIES = 'loopback, linklocal, uniquelocal';
 

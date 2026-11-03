@@ -71,6 +71,7 @@ describe('Turnstile on sign-in (e2e)', () => {
     });
     beforeEach(async () => {
       config.hostnames = null;
+      config.siteKey = SITE_KEY;
       await ta.reset();
     });
     afterAll(() => app.close());
@@ -106,7 +107,7 @@ describe('Turnstile on sign-in (e2e)', () => {
       expect(fake.requests).toHaveLength(0);
     });
 
-    it('a passing token: the normal sign-in, and siteverify got secret, token, remote ip and an idempotency key', async () => {
+    it('a passing token: the normal sign-in, and siteverify got secret, token and an idempotency key, no remote ip', async () => {
       const rec = await seedUser(ta.testDb, 'receptionist');
       const res = await login({ email: rec.email, password: rec.password, turnstileToken: PASS_TOKEN });
       expect(res.status).toBe(200);
@@ -118,8 +119,22 @@ describe('Turnstile on sign-in (e2e)', () => {
       expect(sent.contentType).toMatch(/^application\/json/);
       expect(sent.body.secret).toBe(FAKE_SECRET);
       expect(sent.body.response).toBe(PASS_TOKEN);
-      expect(sent.body.remoteip).toMatch(/127\.0\.0\.1|::1/);
+      expect(sent.body).not.toHaveProperty('remoteip');
       expect(sent.body.idempotency_key).toMatch(UUID);
+    });
+
+    it('a forged X-Forwarded-For never reaches siteverify', async () => {
+      // Any LAN client is a "trusted proxy" for Express (uniquelocal), as this
+      // loopback test client is, so req.ip would be whatever it claims.
+      const rec = await seedUser(ta.testDb, 'receptionist');
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .set('X-Forwarded-For', '203.0.113.9')
+        .send({ email: rec.email, password: rec.password, turnstileToken: PASS_TOKEN });
+      expect(res.status).toBe(200);
+      expect(fake.requests).toHaveLength(1);
+      expect(fake.requests[0].body).not.toHaveProperty('remoteip');
+      expect(JSON.stringify(fake.requests[0].body)).not.toContain('203.0.113.9');
     });
 
     it('a passing token and a wrong password: the normal 401, and that attempt is counted', async () => {
@@ -166,11 +181,31 @@ describe('Turnstile on sign-in (e2e)', () => {
       expect(res.body.code).toBe('captcha_failed');
     });
 
-    it('an empty action (Cloudflare test keys) is accepted', async () => {
+    it('an empty action with a real site key: 403 captcha_failed', async () => {
       fake.setAnswer({ action: '' });
       const rec = await seedUser(ta.testDb, 'receptionist');
       const res = await login({ email: rec.email, password: rec.password, turnstileToken: PASS_TOKEN });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('captcha_failed');
+    });
+
+    it.each(['1x00000000000000000000AA', '2x00000000000000000000AA', '3x00000000000000000000AA'])(
+      'an empty action with Cloudflare dummy site key %s (their test answers carry none) is accepted',
+      async (dummy) => {
+        config.siteKey = dummy;
+        fake.setAnswer({ action: '' });
+        const rec = await seedUser(ta.testDb, 'receptionist');
+        const res = await login({ email: rec.email, password: rec.password, turnstileToken: PASS_TOKEN });
+        expect(res.status).toBe(200);
+      },
+    );
+
+    it('a dummy site key does not relax the action check for a non-empty action', async () => {
+      config.siteKey = '1x00000000000000000000AA';
+      fake.setAnswer({ action: 'register' });
+      const rec = await seedUser(ta.testDb, 'receptionist');
+      const res = await login({ email: rec.email, password: rec.password, turnstileToken: PASS_TOKEN });
+      expect(res.status).toBe(403);
     });
 
     it('with TURNSTILE_HOSTNAMES set: a token solved on another hostname is 403, a listed one passes', async () => {

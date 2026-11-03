@@ -44,7 +44,7 @@ export class AuthController {
     const b = asBody(body);
     // Before SessionsService.login: a failed captcha neither counts as an
     // attempt for the email nor reaches the password (src/auth/turnstile.ts).
-    await this.turnstile.verify(b.turnstileToken, req.ip);
+    await this.turnstile.verify(b.turnstileToken);
     const { token, absoluteExpiresAt, user } = await this.sessions.login(b.email, b.password, b.totp);
     res.cookie(SESSION_COOKIE, token, { ...cookieOptions(req), expires: absoluteExpiresAt });
     return user;

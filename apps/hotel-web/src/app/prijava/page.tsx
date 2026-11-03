@@ -10,6 +10,25 @@ interface AuthConfig {
   turnstileSiteKey: string | null;
 }
 
+/** The site key from GET /auth/config, or null when Turnstile is off or the call failed. */
+async function fetchSiteKey(): Promise<string | null> {
+  try {
+    const c = await api<AuthConfig>('/auth/config');
+    return typeof c?.turnstileSiteKey === 'string' && c.turnstileSiteKey !== '' ? c.turnstileSiteKey : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * "flexible" needs at least 300 px; below a 365 px viewport the card (16 px
+ * gutters plus its padding) is narrower than that, so the widget goes compact.
+ */
+function widgetSize(): 'flexible' | 'compact' {
+  const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 364px)').matches;
+  return narrow ? 'compact' : 'flexible';
+}
+
 /**
  * Email and password; owners and managers also need the current code from
  * their authenticator. The code field appears once the API answers
@@ -39,11 +58,9 @@ export default function SignInPage() {
     let live = true;
     // Without an answer the page works as it did before Turnstile: if the API
     // does want a token, the login answers captcha_failed and says so.
-    api<AuthConfig>('/auth/config')
-      .then((c) => {
-        if (live && typeof c?.turnstileSiteKey === 'string' && c.turnstileSiteKey !== '') setSiteKey(c.turnstileSiteKey);
-      })
-      .catch(() => undefined);
+    void fetchSiteKey().then((key) => {
+      if (live && key) setSiteKey(key);
+    });
     return () => {
       live = false;
     };
@@ -60,7 +77,7 @@ export default function SignInPage() {
           sitekey: siteKey,
           action: TURNSTILE_LOGIN_ACTION,
           theme: 'auto',
-          size: 'flexible',
+          size: widgetSize(),
           callback: (token) => setCaptchaToken(token),
           'expired-callback': () => setCaptchaToken(null),
           'timeout-callback': () => setCaptchaToken(null),
@@ -103,6 +120,15 @@ export default function SignInPage() {
         // The token was spent on this attempt; the next one needs a fresh check.
         setCaptchaToken(null);
         if (widget.current) widget.current.api.reset(widget.current.id);
+      } else if (err instanceof ApiError && err.code === 'captcha_failed') {
+        // The API wants a token but the page has no widget (the config call
+        // failed earlier): ask again rather than let the person retry blindly.
+        const key = await fetchSiteKey();
+        if (key) setSiteKey(key);
+        else {
+          setError(MESSAGES.captcha_reload);
+          return;
+        }
       }
       setError(messageFor(err));
     } finally {

@@ -12,7 +12,8 @@ import { DomainError } from '../common/domain-error';
 //    looked at: a failed captcha says nothing about the email and cannot fill
 //    the per-email attempt window, so nobody can lock an account through it.
 //  - Every doubt fails closed: missing or malformed token, success false, a
-//    token for another action or (with TURNSTILE_HOSTNAMES) another hostname
+//    token for another action (an empty action only with a Cloudflare dummy
+//    site key) or (with TURNSTILE_HOSTNAMES) another hostname
 //    is 403 captcha_failed; siteverify unreachable, slow (5 s), non-200 or
 //    not JSON is 503 captcha_unavailable.
 //  - The secret and the token never reach a log line or an error message.
@@ -66,6 +67,11 @@ export function loadTurnstileConfig(
   };
 }
 
+/** Cloudflare's published test site keys (1x… always passes, 2x… always blocks, 3x… forces a challenge). */
+export function isDummySiteKey(siteKey: string): boolean {
+  return /^[123]x0{20}AA$/.test(siteKey);
+}
+
 function captchaFailed(): DomainError {
   return new DomainError('captcha_failed', 'Provera da niste robot nije prošla. Pokušajte ponovo.', 403);
 }
@@ -91,10 +97,14 @@ export class TurnstileService {
 
   /**
    * Throws captcha_failed / captcha_unavailable unless `token` passes
-   * siteverify. Does nothing while Turnstile is off. `remoteIp` is the
-   * client's address as Express resolves it through the trusted proxies.
+   * siteverify. Does nothing while Turnstile is off.
+   *
+   * No `remoteip` is sent (it is optional). Express's req.ip trusts
+   * X-Forwarded-For from every private address (TRUSTED_PROXIES, src/http.ts),
+   * which includes any LAN client of :4200, so the address would be whatever
+   * the caller claims.
    */
-  async verify(token: unknown, remoteIp: string | undefined): Promise<void> {
+  async verify(token: unknown): Promise<void> {
     const config = this.config;
     if (!config) return;
     if (typeof token !== 'string' || token === '' || token.length > TOKEN_MAX) throw captchaFailed();
@@ -106,7 +116,6 @@ export class TurnstileService {
       // marks this one verification.
       idempotency_key: randomUUID(),
     };
-    if (remoteIp) body.remoteip = remoteIp;
 
     let answer: Record<string, unknown>;
     try {
@@ -136,11 +145,11 @@ export class TurnstileService {
     }
 
     if (answer.success !== true) throw captchaFailed();
-    // Cloudflare's test keys answer with an empty action; a real token from
-    // our widget always carries LOGIN_ACTION.
-    if (typeof answer.action === 'string' && answer.action !== '' && answer.action !== LOGIN_ACTION) {
-      throw captchaFailed();
-    }
+    // A real token from our widget always carries LOGIN_ACTION. Cloudflare's
+    // dummy keys answer with an empty action, so only with a dummy site key
+    // is an empty action accepted.
+    const action = typeof answer.action === 'string' ? answer.action : '';
+    if (action !== LOGIN_ACTION && !(action === '' && isDummySiteKey(config.siteKey))) throw captchaFailed();
     if (config.hostnames) {
       const hostname = typeof answer.hostname === 'string' ? answer.hostname.toLowerCase() : '';
       if (!config.hostnames.includes(hostname)) throw captchaFailed();

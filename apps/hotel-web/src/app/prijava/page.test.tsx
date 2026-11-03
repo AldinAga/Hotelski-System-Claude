@@ -275,5 +275,70 @@ describe('/prijava', () => {
       act(() => turnstileScripts()[0].dispatchEvent(new Event('error')));
       expect(await screen.findByRole('alert')).toHaveTextContent('Provera da niste robot nije mogla da se učita');
     });
+
+    it.each([
+      [true, 'compact'],
+      [false, 'flexible'],
+    ])('narrower than 365 px (%s): the widget is %s, so it never sticks out of the card', async (narrow, size) => {
+      const queries: string[] = [];
+      vi.stubGlobal('matchMedia', (q: string) => {
+        queries.push(q);
+        return { matches: narrow && q === '(max-width: 364px)', media: q, addEventListener() {}, removeEventListener() {} };
+      });
+      mockFetch({
+        'GET /api/auth/config': { body: { turnstileSiteKey: SITE_KEY } },
+        'GET /api/setup/status': apiError(410, 'setup_done'),
+      });
+      render(<SignInPage />);
+      await waitFor(() => expect(turnstileScripts()).toHaveLength(1));
+      const { turnstile, rendered } = cloudflareLoads();
+      await vi.waitFor(() => expect(turnstile.render).toHaveBeenCalled());
+      expect(queries).toContain('(max-width: 364px)');
+      expect(rendered[0].options.size).toBe(size);
+    });
+
+    it('captcha_failed while the page had no site key: it asks the API again and shows the widget', async () => {
+      let configCalls = 0;
+      const calls = mockFetch({
+        'GET /api/auth/config': () => (++configCalls === 1 ? apiError(500, 'internal') : { body: { turnstileSiteKey: SITE_KEY } }),
+        'GET /api/setup/status': apiError(410, 'setup_done'),
+        'POST /api/auth/login': apiError(403, 'captcha_failed'),
+      });
+      const user = userEvent.setup();
+      render(<SignInPage />);
+      await vi.waitFor(() => expect(configCalls).toBe(1));
+      await user.type(screen.getByLabelText('E-adresa'), 'a@b.rs');
+      await user.type(screen.getByLabelText('Lozinka'), 'x');
+      await user.click(screen.getByRole('button', { name: 'Prijavi se' }));
+
+      await waitFor(() => expect(turnstileScripts()).toHaveLength(1));
+      expect(configCalls).toBe(2);
+      const { turnstile, rendered } = cloudflareLoads();
+      await vi.waitFor(() => expect(turnstile.render).toHaveBeenCalled());
+      expect(rendered[0].options.sitekey).toBe(SITE_KEY);
+      expect(screen.getByRole('alert')).toHaveTextContent('Provera da niste robot nije prošla. Pokušajte ponovo.');
+      expect(calls.filter((c) => c.url === '/api/auth/login')).toHaveLength(1);
+    });
+
+    it('captcha_failed and the API still gives no site key: the page says to reload, not to retry', async () => {
+      let configCalls = 0;
+      mockFetch({
+        'GET /api/auth/config': () => {
+          configCalls += 1;
+          return { body: { turnstileSiteKey: null } };
+        },
+        'GET /api/setup/status': apiError(410, 'setup_done'),
+        'POST /api/auth/login': apiError(403, 'captcha_failed'),
+      });
+      const user = userEvent.setup();
+      render(<SignInPage />);
+      await vi.waitFor(() => expect(configCalls).toBe(1));
+      await user.type(screen.getByLabelText('E-adresa'), 'a@b.rs');
+      await user.type(screen.getByLabelText('Lozinka'), 'x');
+      await user.click(screen.getByRole('button', { name: 'Prijavi se' }));
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Osvežite stranicu'));
+      expect(configCalls).toBe(2);
+      expect(turnstileScripts()).toHaveLength(0);
+    });
   });
 });

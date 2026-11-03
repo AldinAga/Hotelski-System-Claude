@@ -85,6 +85,8 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
   otkazane rezervacije. TOTP URI nikad ne ispisuje. Plan u Admin Panelu (korak 4) mora imati limite `rooms` **i**
   `users` (bez `users` je `POST /users` 403 `limit_exceeded`); ručna provera (korak 6) nema „aktivaciju", jer je
   smoke već aktivirao instalaciju. Ugovor i podešavanje vlasnika: `docs/contracts/admin-panel.md`.
+  Smoke se pokreće samo dok je Turnstile isključen (nema `TURNSTILE_*` ključeva u `hotel.env`): ne šalje token,
+  pa bi prijava bila 403 `captcha_failed` i sa test ključevima.
 - **CSRF:** API prima samo JSON tela (ostalo je 415) i odbija POST/PUT/PATCH/DELETE kad `Origin` (ili, bez njega,
   `Sec-Fetch-Site`) pokazuje tuđu adresu (403 `origin_refused`), jer SameSite ne razlikuje portove na istom hostu
   (Admin Panel, POS, Portainer). Bez `HOTEL_WEB_ORIGIN` dozvoljen je samo `Origin` jednak hostu kome je zahtev
@@ -100,6 +102,7 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
   domen), inače se ne prikazuje. Za probu na stagingu Cloudflare-ovi test ključevi koji uvek prolaze: site
   `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA`. Opciono `TURNSTILE_HOSTNAMES` (lista sa
   zarezima): token rešen na drugom hostu se odbija (test ključevi vraćaju `example.com`, pa uz njih ostaje prazno).
+  Prazan `action` u odgovoru prihvata se samo uz test site key. Smoke radi samo dok je Turnstile isključen (gore).
   Ugovor i odluke: `docs/contracts/turnstile.md`.
 - **Manifest proizvoda:** `product/manifest.json`; objava `CENTRAL_ADMIN_URL=http://192.168.1.199:4100
   HOTEL_PUBLISHER_TOKEN=… node scripts/publish-manifest.mjs` (servisni token `product_publisher`,

@@ -38,6 +38,7 @@ export const MESSAGES: Record<string, string> = {
   captcha_unavailable: 'Provera da niste robot trenutno nije dostupna. Pokušajte ponovo za minut.',
   captcha_pending: 'Sačekajte da se završi provera da niste robot, pa pokušajte ponovo.',
   captcha_load_failed: 'Provera da niste robot nije mogla da se učita. Proverite vezu i osvežite stranicu.',
+  captcha_reload: 'Prijava traži proveru da niste robot, a ona se nije učitala. Osvežite stranicu.',
   actor_changed: 'Vaš nalog je u međuvremenu izmenjen. Prijavite se ponovo.',
   password_too_short: 'Lozinka mora imati najmanje {min} znakova.',
   password_too_long: 'Lozinka može imati najviše {max} znakova.',

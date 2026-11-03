@@ -756,7 +756,9 @@ html:has(.portal) body {
 
 .portal input:focus,
 .portal select:focus {
-  outline: none;
+  /* Transparent, not none: forced colours drop box-shadow but paint outlines. */
+  outline: 2px solid transparent;
+  outline-offset: 1px;
   border-color: var(--p-focus);
   box-shadow: 0 0 0 3px var(--p-focus);
 }
@@ -768,7 +770,7 @@ html:has(.portal) body {
 
 .portal input:focus-visible,
 .portal select:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
 }
 
 .portal button[type='submit'] {
@@ -853,7 +855,7 @@ html:has(.portal) body {
   color: var(--p-text);
 }
 
-/* Turnstile widget: full width of the card (size "flexible", 300 px minimum). */
+/* Turnstile widget: full card width (size "flexible", 300 px minimum); "compact" below a 365 px viewport. */
 .portal-turnstile {
   min-height: 65px;
 }
@@ -964,5 +966,11 @@ html:has(.portal) body {
   .portal-card::before,
   .portal-backdrop {
     display: none;
+  }
+  .portal input:focus,
+  .portal select:focus,
+  .portal input:focus-visible,
+  .portal select:focus-visible {
+    outline: 3px solid Highlight;
   }
 }
