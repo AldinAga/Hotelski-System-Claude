@@ -2,6 +2,7 @@
 
 import QRCode from 'qrcode';
 import { useEffect, useState, type FormEvent } from 'react';
+import { EntryPortal } from '@/components/entry-portal';
 import { api, ApiError, send, type SetupStatus } from '@/lib/api';
 import { MESSAGES, messageFor } from '@/lib/messages';
 
@@ -151,8 +152,7 @@ export default function ActivationPage() {
   const secret = totpUri ? secretOf(totpUri) : null;
 
   return (
-    <main className="narrow">
-      <h1>Prvo podešavanje</h1>
+    <EntryPortal title="Prvo podešavanje" lead="Radi se jednom, pri instalaciji." wide>
 
       {step !== 'loading' && step !== 'already' && step !== 'finished' && (
         <ol className="steps">
@@ -309,6 +309,6 @@ export default function ActivationPage() {
           <a href="/prijava">Prijava</a>
         </div>
       )}
-    </main>
+    </EntryPortal>
   );
 }

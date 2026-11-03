@@ -441,3 +441,528 @@ table.nights td.num {
   color: var(--muted);
   cursor: not-allowed;
 }
+
+/* ------------------------------------------------------------------------
+ * Entry portal: sign-in (/prijava) and first-run setup (/aktivacija).
+ *
+ * Liquid glass, the material the owner approved for the Central Admin Panel:
+ * vivid blurred blobs behind a frosted card with a specular rim. The hotel
+ * gets its own palette (apricot, sea, dusk) and copper accent.
+ *
+ * Everything below is scoped to .portal, and the tokens use their own --p-*
+ * names, so the signed-in app (calendar, settings) keeps its look. The app
+ * itself has no dark theme; only the portal follows prefers-color-scheme.
+ *
+ * Contrast was computed against the worst backdrop behind the card (page
+ * background with every blob and every pair of blobs, then the glass tint):
+ * text 11.6:1 light / 9.7:1 dark, secondary text 6.3:1, button text 5.0:1 /
+ * 8.4:1, focus ring 5.3:1 / 7.9:1, field borders 3.6:1 / 3.5:1, error text
+ * 4.8:1 / 5.3:1. Changing a colour here means recomputing those numbers.
+ * ---------------------------------------------------------------------- */
+:root {
+  --p-bg-1: #f7f3ee;
+  --p-bg-2: #efe7f2;
+  --p-text: #1d1a26;
+  --p-text-soft: #4a4458;
+  --p-glass: rgba(255, 255, 255, 0.55);
+  --p-glass-solid: rgba(255, 255, 255, 0.9);
+  --p-edge: rgba(255, 255, 255, 1);
+  --p-edge-soft: rgba(120, 80, 50, 0.16);
+  --p-inset-top: rgba(255, 255, 255, 0.95);
+  --p-shadow: 0 30px 60px -28px rgba(110, 60, 30, 0.45), 0 2px 6px rgba(110, 60, 30, 0.08);
+  --p-accent: #a3401a;
+  --p-accent-2: #b8501f;
+  --p-on-accent: #ffffff;
+  --p-accent-glow: rgba(163, 64, 26, 0.45);
+  --p-link: #8f3511;
+  --p-focus: #8f3511;
+  --p-field: rgba(255, 255, 255, 0.7);
+  --p-field-border: #6f677c;
+  --p-danger: #9b1c14;
+  --p-danger-bg: rgba(220, 60, 50, 0.12);
+  --p-ok: #17573a;
+  --p-ok-bg: rgba(40, 160, 100, 0.14);
+  --p-chip: rgba(255, 255, 255, 0.6);
+  --p-blob-1: #ff9b62;
+  --p-blob-2: #3cb9a8;
+  --p-blob-3: #8b7bff;
+  --p-blob-opacity: 0.4;
+  --p-blob-blend: multiply;
+  --p-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --p-bg-1: #0d0f17;
+    --p-bg-2: #1b1626;
+    --p-text: #f5f0ea;
+    --p-text-soft: #c9c1cf;
+    --p-glass: rgba(24, 22, 34, 0.5);
+    --p-glass-solid: rgba(24, 22, 34, 0.92);
+    --p-edge: rgba(255, 255, 255, 0.42);
+    --p-edge-soft: rgba(255, 255, 255, 0.08);
+    --p-inset-top: rgba(255, 255, 255, 0.28);
+    --p-shadow: 0 30px 60px -24px rgba(0, 0, 0, 0.6);
+    --p-accent: #ffb37e;
+    --p-accent-2: #ff9a62;
+    --p-on-accent: #2b1306;
+    --p-accent-glow: rgba(255, 154, 98, 0.4);
+    --p-link: #ffc79e;
+    --p-focus: #ffd3b0;
+    --p-field: rgba(255, 255, 255, 0.07);
+    --p-field-border: #968f9f;
+    --p-danger: #ffb4bf;
+    --p-danger-bg: rgba(255, 107, 138, 0.16);
+    --p-ok: #9fe8c4;
+    --p-ok-bg: rgba(61, 220, 151, 0.14);
+    --p-chip: rgba(255, 255, 255, 0.1);
+    --p-blob-1: #ff8a4c;
+    --p-blob-2: #21b3a0;
+    --p-blob-3: #7a6cff;
+    --p-blob-opacity: 0.34;
+    --p-blob-blend: normal;
+  }
+}
+
+/* The page behind the portal (also under the notch and the overscroll). */
+html:has(.portal),
+html:has(.portal) body {
+  background: var(--p-bg-1);
+}
+
+.portal {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--p-text);
+  background: radial-gradient(1100px 760px at 12% -10%, var(--p-bg-2), var(--p-bg-1));
+  color-scheme: light;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  .portal {
+    color-scheme: dark;
+  }
+}
+
+/* Blobs: liquid glass only reads when there is something vivid to refract. */
+.portal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  filter: blur(64px) saturate(75%);
+}
+
+.portal-blob {
+  position: absolute;
+  border-radius: 50%;
+  opacity: var(--p-blob-opacity);
+  mix-blend-mode: var(--p-blob-blend);
+  animation: portal-drift 24s ease-in-out infinite alternate;
+}
+
+.portal-blob-1 {
+  width: min(560px, 90vw);
+  aspect-ratio: 1;
+  left: -18vw;
+  top: 6vh;
+  background: var(--p-blob-1);
+}
+
+.portal-blob-2 {
+  width: min(480px, 80vw);
+  aspect-ratio: 1;
+  right: -14vw;
+  top: -10vh;
+  background: var(--p-blob-2);
+  animation-duration: 28s;
+}
+
+.portal-blob-3 {
+  width: min(440px, 75vw);
+  aspect-ratio: 1;
+  left: 38%;
+  bottom: -18vh;
+  background: var(--p-blob-3);
+  animation-duration: 32s;
+}
+
+@keyframes portal-drift {
+  to {
+    transform: translate(56px, -40px) scale(1.08);
+  }
+}
+
+.portal-main {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(16px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+}
+
+/* Wordmark: a concierge bell and "Recepcija". */
+.portal-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+}
+
+.portal-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  color: var(--p-on-accent);
+  background: linear-gradient(140deg, var(--p-accent-2), var(--p-accent));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 8px 20px -8px var(--p-accent-glow);
+}
+
+.portal-mark svg {
+  width: 22px;
+  height: 22px;
+}
+
+.portal-wordmark small {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--p-text-soft);
+}
+
+/* The glass card: blur + vibrancy, specular rim, inner highlight, soft shadow. */
+.portal-card {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  max-width: 440px;
+  padding: clamp(18px, 5vw, 32px);
+  border-radius: 26px;
+  background: var(--p-glass);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    var(--p-shadow),
+    inset 0 1px 0 var(--p-inset-top),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+  animation: portal-card-in 0.55s var(--p-ease-out) both;
+}
+
+.portal-card.portal-wide {
+  max-width: 520px;
+}
+
+/* Specular rim, brighter top-left like light on a curved edge. */
+.portal-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1.2px;
+  pointer-events: none;
+  background: linear-gradient(135deg, var(--p-edge), var(--p-edge-soft) 40%, var(--p-edge-soft) 60%, rgba(255, 255, 255, 0.3));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+@keyframes portal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+}
+
+.portal-card h1 {
+  margin: 0 0 4px;
+  font-size: 1.5rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.portal-lead {
+  margin: 0 0 20px;
+  color: var(--p-text-soft);
+  font-size: 0.95rem;
+}
+
+/* The forms sit directly on the glass. */
+.portal .card {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.portal .stack {
+  gap: 14px;
+}
+
+.portal label {
+  color: var(--p-text);
+}
+
+.portal .help,
+.portal .muted {
+  color: var(--p-text-soft);
+  margin: 0;
+}
+
+.portal a {
+  color: var(--p-link);
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+
+.portal input,
+.portal select {
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid var(--p-field-border);
+  border-radius: 14px;
+  background: var(--p-field);
+  color: var(--p-text);
+  transition:
+    border-color 160ms var(--p-ease-out),
+    box-shadow 160ms var(--p-ease-out);
+}
+
+.portal input:focus,
+.portal select:focus {
+  outline: none;
+  border-color: var(--p-focus);
+  box-shadow: 0 0 0 3px var(--p-focus);
+}
+
+.portal :focus-visible {
+  outline: 3px solid var(--p-focus);
+  outline-offset: 3px;
+}
+
+.portal input:focus-visible,
+.portal select:focus-visible {
+  outline: none;
+}
+
+.portal button[type='submit'] {
+  min-height: 50px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(140deg, var(--p-accent-2), var(--p-accent));
+  color: var(--p-on-accent);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 10px 24px -12px var(--p-accent-glow);
+  transition:
+    transform 160ms var(--p-ease-out),
+    box-shadow 160ms var(--p-ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .portal button[type='submit']:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      0 14px 28px -10px var(--p-accent-glow);
+  }
+}
+
+.portal button[type='submit']:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+  transition-duration: 120ms;
+}
+
+.portal-card > .error,
+.portal-card > .muted {
+  margin-bottom: 14px;
+}
+
+.portal .error {
+  background: var(--p-danger-bg);
+  color: var(--p-danger);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+
+.portal .notice {
+  background: var(--p-ok-bg);
+  color: var(--p-ok);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+
+/* Wizard steps as glass chips. */
+.portal .steps {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 18px;
+  color: var(--p-text-soft);
+}
+
+.portal .steps li {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--p-chip);
+}
+
+.portal .steps .current {
+  color: var(--p-on-accent);
+  background: linear-gradient(140deg, var(--p-accent-2), var(--p-accent));
+}
+
+.portal .qr {
+  border-radius: 14px;
+  border: 0;
+  justify-self: center;
+}
+
+.portal code.secret {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--p-chip);
+  color: var(--p-text);
+}
+
+/* Turnstile widget: full width of the card (size "flexible", 300 px minimum). */
+.portal-turnstile {
+  min-height: 65px;
+}
+
+.portal-foot {
+  margin: 0;
+  color: var(--p-text-soft);
+  font-size: 0.8rem;
+}
+
+/* Back to top: appears after the first screen of scrolling. */
+.back-to-top {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  border: 1px solid var(--p-field-border);
+  border-radius: 50%;
+  background: var(--p-glass-solid);
+  color: var(--p-text);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--p-shadow);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px);
+  transition:
+    opacity 200ms var(--p-ease-out),
+    transform 200ms var(--p-ease-out),
+    visibility 0s linear 200ms;
+}
+
+.back-to-top.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 200ms var(--p-ease-out),
+    transform 200ms var(--p-ease-out),
+    visibility 0s;
+}
+
+.back-to-top svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* No backdrop-filter: a see-through card over the blobs would be hard to read. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .portal-card {
+    background: var(--p-glass-solid);
+  }
+}
+
+/* Drifting blobs re-blur the backdrop every frame; phones and touch devices skip it. */
+@media (hover: none), (max-width: 900px), (prefers-reduced-transparency: reduce) {
+  .portal-blob {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .portal-card {
+    background: var(--p-glass-solid);
+  }
+}
+
+/* Reduced motion: nothing drifts, slides or scales; the card only fades. */
+@media (prefers-reduced-motion: reduce) {
+  .portal-blob {
+    animation: none;
+  }
+  .portal-card {
+    animation: portal-fade 160ms ease both;
+  }
+  .portal button[type='submit']:hover:not(:disabled),
+  .portal button[type='submit']:active:not(:disabled) {
+    transform: none;
+  }
+  .back-to-top {
+    transform: none;
+  }
+}
+
+@keyframes portal-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Windows high contrast: solid system surfaces instead of glass. */
+@media (forced-colors: active) {
+  .portal-card,
+  .back-to-top {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  .portal-card::before,
+  .portal-backdrop {
+    display: none;
+  }
+}

@@ -92,6 +92,15 @@ na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
   (lista sa zarezima). Skripte i klijenti bez `Origin` i `Sec-Fetch-Site` prolaze. Produkcija dobija svoj hostname.
 - **Secure kolačić:** API veruje `X-Forwarded-Proto` od proksija sa privatnih adresa (trust proxy), pa je kolačić
   `Secure` kad recepcija radi preko HTTPS-a; HTTP na LAN-u (staging) ostaje kako jeste.
+- **Cloudflare Turnstile na prijavi:** isključen dok u `/volume1/ci/hotel/hotel.env` nisu oba ključa,
+  `TURNSTILE_SITE_KEY` i `TURNSTILE_SECRET_KEY` (samo jedan: ostaje isključen, a log API-ja imenuje onaj koji
+  nedostaje). Uključuje se ručno: oba reda se dopisuju u `hotel.env` (vrednosti se ne ispisuju i ne idu u repo),
+  pa `bash infrastructure/nas/deploy.sh` ponovo podiže `api`; web čita site key iz `GET /auth/config` u toku rada,
+  bez novog builda. U Cloudflare-u widget mora da ima hostname recepcije (npr. `192.168.1.199` ili produkcijski
+  domen), inače se ne prikazuje. Za probu na stagingu Cloudflare-ovi test ključevi koji uvek prolaze: site
+  `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA`. Opciono `TURNSTILE_HOSTNAMES` (lista sa
+  zarezima): token rešen na drugom hostu se odbija (test ključevi vraćaju `example.com`, pa uz njih ostaje prazno).
+  Ugovor i odluke: `docs/contracts/turnstile.md`.
 - **Manifest proizvoda:** `product/manifest.json`; objava `CENTRAL_ADMIN_URL=http://192.168.1.199:4100
   HOTEL_PUBLISHER_TOKEN=… node scripts/publish-manifest.mjs` (servisni token `product_publisher`,
   samo uz odobrenje korisnika; svaka izmena manifesta traži veću `version`).

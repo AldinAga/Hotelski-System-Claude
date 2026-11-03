@@ -6,23 +6,30 @@ import type { NextConfig } from 'next';
 // build time (the container image build passes it).
 const apiUrl = (process.env.HOTEL_API_URL ?? 'http://localhost:4200').replace(/\/+$/, '');
 
-const securityHeaders = [
-  {
-    key: 'Content-Security-Policy',
-    value: [
-      "default-src 'self'",
-      // Next's App Router emits inline scripts for hydration; eval only in dev (HMR).
-      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'production' ? '' : " 'unsafe-eval'"}`,
-      "style-src 'self' 'unsafe-inline'",
-      // data: for the TOTP QR code, which is drawn locally and never sent anywhere.
-      "img-src 'self' data:",
-      "connect-src 'self'" + (process.env.NODE_ENV === 'production' ? '' : ' ws: wss:'),
-      "object-src 'none'",
-      "base-uri 'none'",
-      "form-action 'self'",
-      "frame-ancestors 'none'",
-    ].join('; '),
-  },
+// Cloudflare Turnstile (sign-in only, when hotel-api has a site key): its script
+// and its challenge iframe come from this origin.
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
+function csp(turnstile: boolean): string {
+  const cf = turnstile ? ` ${TURNSTILE_ORIGIN}` : '';
+  return [
+    "default-src 'self'",
+    // Next's App Router emits inline scripts for hydration; eval only in dev (HMR).
+    `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'production' ? '' : " 'unsafe-eval'"}${cf}`,
+    "style-src 'self' 'unsafe-inline'",
+    // data: for the TOTP QR code, which is drawn locally and never sent anywhere.
+    "img-src 'self' data:",
+    "connect-src 'self'" + (process.env.NODE_ENV === 'production' ? '' : ' ws: wss:'),
+    // Only on /prijava; elsewhere frames fall back to default-src as before.
+    ...(turnstile ? [`frame-src ${TURNSTILE_ORIGIN}`] : []),
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
+
+const otherHeaders = [
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'same-origin' },
@@ -37,7 +44,12 @@ const nextConfig: NextConfig = {
     return [{ source: '/api/:path*', destination: `${apiUrl}/:path*` }];
   },
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    // When two rules set the same header, Next keeps the later one: /prijava
+    // gets the policy that admits Turnstile, every other page the strict one.
+    return [
+      { source: '/:path*', headers: [{ key: 'Content-Security-Policy', value: csp(false) }, ...otherHeaders] },
+      { source: '/prijava', headers: [{ key: 'Content-Security-Policy', value: csp(true) }] },
+    ];
   },
 };
 

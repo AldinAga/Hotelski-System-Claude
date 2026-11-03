@@ -4,6 +4,7 @@ import { asBody } from '../common/input';
 import { Unlicensed } from '../licensing/licensed-action';
 import { CurrentUser, Public } from './auth.guard';
 import { SESSION_COOKIE, SessionsService, type AuthUser, type PublicUser } from './sessions.service';
+import { TurnstileService } from './turnstile';
 
 // HttpOnly keeps the token from scripts. SameSite=Strict keeps other *sites*
 // from sending it, but SameSite ignores ports: every app on the same host
@@ -20,7 +21,17 @@ function cookieOptions(req: Request): CookieOptions {
 @Controller('auth')
 @Unlicensed()
 export class AuthController {
-  constructor(private readonly sessions: SessionsService) {}
+  constructor(
+    private readonly sessions: SessionsService,
+    private readonly turnstile: TurnstileService,
+  ) {}
+
+  /** What the sign-in page needs before a session exists: the public Turnstile site key, or null while it is off. */
+  @Get('config')
+  @Public()
+  config(): { turnstileSiteKey: string | null } {
+    return { turnstileSiteKey: this.turnstile.siteKey() };
+  }
 
   @Post('login')
   @Public()
@@ -31,6 +42,9 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<PublicUser> {
     const b = asBody(body);
+    // Before SessionsService.login: a failed captcha neither counts as an
+    // attempt for the email nor reaches the password (src/auth/turnstile.ts).
+    await this.turnstile.verify(b.turnstileToken, req.ip);
     const { token, absoluteExpiresAt, user } = await this.sessions.login(b.email, b.password, b.totp);
     res.cookie(SESSION_COOKIE, token, { ...cookieOptions(req), expires: absoluteExpiresAt });
     return user;

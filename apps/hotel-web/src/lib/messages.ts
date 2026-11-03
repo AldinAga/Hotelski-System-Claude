@@ -33,6 +33,11 @@ export const MESSAGES: Record<string, string> = {
   forbidden_role: 'Vaša uloga nema pravo na ovu radnju.',
   origin_refused: 'Zahtev je poslat sa druge adrese i odbijen je. Otvorite recepciju direktno i pokušajte ponovo.',
   unsupported_media_type: 'Zahtev mora biti poslat kao JSON.',
+  // Cloudflare Turnstile on sign-in (the last two are the page's own, not the API's)
+  captcha_failed: 'Provera da niste robot nije prošla. Pokušajte ponovo.',
+  captcha_unavailable: 'Provera da niste robot trenutno nije dostupna. Pokušajte ponovo za minut.',
+  captcha_pending: 'Sačekajte da se završi provera da niste robot, pa pokušajte ponovo.',
+  captcha_load_failed: 'Provera da niste robot nije mogla da se učita. Proverite vezu i osvežite stranicu.',
   actor_changed: 'Vaš nalog je u međuvremenu izmenjen. Prijavite se ponovo.',
   password_too_short: 'Lozinka mora imati najmanje {min} znakova.',
   password_too_long: 'Lozinka može imati najviše {max} znakova.',
