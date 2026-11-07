@@ -122,6 +122,11 @@ describe('guests (e2e)', () => {
     const booked = await bookOne({ adults: 2, children: 1 });
     const existing = await newGuest('Ana', 'Anić');
 
+    // While the stay still has room, so only the guest lookup can answer.
+    const missing = await fd.post(`/stays/${booked.stayId}/guests`, { guestId: '00000000-0000-4000-8000-000000000000' });
+    expect(missing.status).toBe(404);
+    expect(missing.body.code).toBe('guest_not_found');
+
     const addNew = await fd.post(`/stays/${booked.stayId}/guests`, { guest: { firstName: 'Mila', lastName: 'Milić' } });
     expect(addNew.status).toBe(201);
     const addExisting = await fd.post(`/stays/${booked.stayId}/guests`, { guestId: existing });
@@ -141,9 +146,6 @@ describe('guests (e2e)', () => {
     expect(view.body.version).toBe(booked.version);
     expect(view.body.stays[0].guests).toHaveLength(3);
 
-    const missing = await fd.post(`/stays/${booked.stayId}/guests`, { guestId: '00000000-0000-4000-8000-000000000000' });
-    expect(missing.status).toBe(404);
-    expect(missing.body.code).toBe('guest_not_found');
     expect((await fd.post('/stays/00000000-0000-4000-8000-000000000000/guests', { guestId: existing })).body.code).toBe(
       'stay_not_found',
     );
