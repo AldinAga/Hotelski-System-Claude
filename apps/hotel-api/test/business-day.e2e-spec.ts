@@ -259,6 +259,23 @@ describe('business day (e2e)', () => {
     expect(rec.body.code).toBe('forbidden_role');
   });
 
+  it('the business day and its settings are hotel.folio: a licence with hotel.core only refuses them', async () => {
+    await fd.reset({ modules: ['hotel.core'] });
+    const seen = [];
+    for (const [route, res] of [
+      ['GET /business-day', await fd.get('/business-day')],
+      ['GET /settings/business', await fd.get('/settings/business', fd.manager)],
+      ['PUT /settings/business', await fd.put('/settings/business', {})],
+    ] as const) {
+      seen.push({ route, status: res.status, code: res.body.code });
+    }
+    expect(seen).toEqual(
+      ['GET /business-day', 'GET /settings/business', 'PUT /settings/business'].map((route) => ({ route, status: 403, code: 'module_not_licensed' })),
+    );
+    // hotel.core routes still answer under the same licence.
+    expect((await fd.get('/guests')).status).toBe(200);
+  });
+
   it('a receptionist cannot change settings; in safe mode GET works and PUT is safe_mode_blocked', async () => {
     expect((await fd.put('/settings/business', { noShowCharge: 'none' }, fd.receptionist)).body.code).toBe('forbidden_role');
     fd.shiftLicence(400 * 86_400_000);
