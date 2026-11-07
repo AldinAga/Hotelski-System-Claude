@@ -30,24 +30,42 @@ describe('business day (e2e)', () => {
     expect(await fd.sql('SELECT 1 FROM business_day')).toHaveLength(0);
   });
 
-  it('ten concurrent first writes open today exactly once', async () => {
-    // A barrier: all ten transactions hold a connection and have begun before any of them
+  it('concurrent first writes (nine, below the pool max) open today exactly once', async () => {
+    // A barrier: all n transactions hold a connection and have begun before any of them
     // looks for the day. Without it the first one can commit before the pool has opened
     // the other connections, and the writes no longer race (the ON CONFLICT probe survived).
-    const n = 10;
+    // n must stay below the test pool's max (pg default 10; test/db.ts sets none): each
+    // transaction holds a client at the barrier, so n = max leaves no client for anything
+    // else and n > max never reaches it. Ruling 27a.
+    const n = 9;
     let begun = 0;
     let go!: () => void;
     const all = new Promise<void>((r) => (go = r));
-    const days = await Promise.all(
-      Array.from({ length: n }, () =>
-        fd.ta.testDb.db.transaction(async (tx) => {
-          await tx.execute(sql`SELECT 1`);
-          if (++begun === n) go();
-          await all;
-          return svc.lockOpen(tx, pid, 'share');
-        }),
-      ),
-    );
+    let timer: NodeJS.Timeout | undefined;
+    // The barrier races a rejecting timeout, so a transaction that never gets a client
+    // fails the test instead of hanging the worker.
+    const barrier = Promise.race([
+      all,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`barrier: only ${begun} of ${n} transactions began`)), 3_000);
+      }),
+    ]);
+    barrier.catch(() => undefined);
+    let days: string[] = [];
+    try {
+      days = await Promise.all(
+        Array.from({ length: n }, () =>
+          fd.ta.testDb.db.transaction(async (tx) => {
+            await tx.execute(sql`SELECT 1`);
+            if (++begun === n) go();
+            await barrier;
+            return svc.lockOpen(tx, pid, 'share');
+          }),
+        ),
+      );
+    } finally {
+      clearTimeout(timer);
+    }
     expect(new Set(days)).toEqual(new Set(['2026-11-02']));
     expect(await fd.sql(`SELECT day::text AS day, status FROM business_day`)).toEqual([
       { day: '2026-11-02', status: 'open' },
@@ -65,6 +83,19 @@ describe('business day (e2e)', () => {
     expect(new Date(rows[0].opened_at).toISOString()).toBe(late.toISOString());
     // Through the service: 15.5 h later the harness sessions have expired (they run on CLOCK too).
     expect(await svc.view()).toMatchObject({ day: '2026-11-03', today: '2026-11-03', started: true, lagDays: 0 });
+  });
+
+  it('with closed days before it, lockOpen returns the open day in both modes', async () => {
+    // Closed rows first by day and by insertion: without the status filter they come first.
+    await fd.sql(
+      `INSERT INTO business_day (property_id, day, status, closed_at, close_mode, report) VALUES
+         ($1, '2026-10-31', 'closed', '2026-11-01T01:00:00Z', 'manual', '{}'),
+         ($1, '2026-11-01', 'closed', '2026-11-02T01:00:00Z', 'auto', '{}')`,
+      [pid],
+    );
+    await fd.sql(`INSERT INTO business_day (property_id, day, status) VALUES ($1, '2026-11-02', 'open')`, [pid]);
+    expect({ share: await open('share'), update: await open('update') }).toEqual({ share: '2026-11-02', update: '2026-11-02' });
+    expect(await fd.sql(`SELECT count(*)::int AS n FROM business_day`)).toEqual([{ n: 3 }]);
   });
 
   it('an older open day is the one locked; GET shows the lag; a second open day is refused by the database', async () => {
