@@ -103,10 +103,16 @@ describe('business day (e2e)', () => {
       await svc.lockOpen(tx, pid, 'update');
       bDone = true;
     });
-    await delay(300);
-    expect(bDone).toBe(false);
-    release();
-    await Promise.all([a, b]);
+    let waited = false;
+    try {
+      await delay(300);
+      waited = !bDone;
+    } finally {
+      // Released even when the check fails: a held transaction would block every later reset.
+      release();
+      await Promise.all([a, b]);
+    }
+    expect(waited).toBe(true);
     expect(bDone).toBe(true);
   });
 
@@ -122,11 +128,13 @@ describe('business day (e2e)', () => {
       await held;
     });
     await sharedTaken;
-    const started = Date.now();
-    await open('share');
-    expect(Date.now() - started).toBeLessThan(250);
+    // A race, not a plain await: if the second lock waited for the first, the test still
+    // releases the first and fails on the result instead of hanging.
+    const second = open('share');
+    const first = await Promise.race([second.then(() => 'second share lock'), delay(250).then(() => 'timeout')]);
     release();
-    await a;
+    await Promise.all([a, second]);
+    expect(first).toBe('second share lock');
   });
 
   it('settings: defaults without a row; PUT stores them; a bad time or rate is 422 naming the field', async () => {
