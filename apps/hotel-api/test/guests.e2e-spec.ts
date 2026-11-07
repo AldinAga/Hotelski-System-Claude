@@ -116,16 +116,22 @@ describe('guests (e2e)', () => {
 
     expect((await fd.patch('/guests/00000000-0000-4000-8000-000000000000', { note: 'x' })).status).toBe(404);
     expect((await fd.patch(`/guests/${id}`, { language: 'srb' })).body.details).toEqual({ field: 'language' });
+    const blankName = await fd.patch(`/guests/${id}`, { lastName: '  ' });
+    expect(blankName.status).toBe(422);
+    expect(blankName.body.details).toEqual({ field: 'lastName' });
   });
 
   it('adds a new guest and an existing guest (guestId) to a stay; audit stay.guest_add; version unchanged', async () => {
     const booked = await bookOne({ adults: 2, children: 1 });
     const existing = await newGuest('Ana', 'Anić');
 
-    // While the stay still has room, so only the guest lookup can answer.
+    // While the stay still has room, so the guest lookup and the body check answer, not the guest limit.
     const missing = await fd.post(`/stays/${booked.stayId}/guests`, { guestId: '00000000-0000-4000-8000-000000000000' });
     expect(missing.status).toBe(404);
     expect(missing.body.code).toBe('guest_not_found');
+    const neither = await fd.post(`/stays/${booked.stayId}/guests`, {});
+    expect(neither.status).toBe(422);
+    expect(neither.body).toMatchObject({ code: 'validation_failed', details: { field: 'guestId' } });
 
     const addNew = await fd.post(`/stays/${booked.stayId}/guests`, { guest: { firstName: 'Mila', lastName: 'Milić' } });
     expect(addNew.status).toBe(201);
@@ -149,7 +155,6 @@ describe('guests (e2e)', () => {
     expect((await fd.post('/stays/00000000-0000-4000-8000-000000000000/guests', { guestId: existing })).body.code).toBe(
       'stay_not_found',
     );
-    expect((await fd.post(`/stays/${booked.stayId}/guests`, {})).status).toBe(422);
   });
 
   it('a third guest on a stay for 2 adults: 422 too_many_guests with limit 2, nothing written', async () => {
@@ -261,6 +266,26 @@ describe('guests (e2e)', () => {
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('forbidden_role');
     expect((await fd.post('/guests', { firstName: 'A', lastName: 'B' }, fd.housekeeping)).body.code).toBe('forbidden_role');
+
+    // The stay-guest routes are another controller with their own @Roles.
+    const booked = await bookOne({ adults: 2, children: 1 });
+    const [holder] = await stayGuests(booked.stayId);
+    const ana = await newGuest('Ana', 'Anić');
+    expect((await fd.post(`/stays/${booked.stayId}/guests`, { guestId: ana })).status).toBe(201);
+    const attempts = [
+      await fd.post(`/stays/${booked.stayId}/guests`, { guest: { firstName: 'Mila', lastName: 'Milić' } }, fd.housekeeping),
+      await fd.del(`/stays/${booked.stayId}/guests/${ana}`, fd.housekeeping),
+      await fd.post(`/stays/${booked.stayId}/guests/${ana}/primary`, {}, fd.housekeeping),
+    ];
+    expect(attempts.map((r) => [r.status, r.body.code])).toEqual([
+      [403, 'forbidden_role'],
+      [403, 'forbidden_role'],
+      [403, 'forbidden_role'],
+    ]);
+    expect(await stayGuests(booked.stayId)).toEqual([
+      { guest_id: holder.guest_id, is_primary: true },
+      { guest_id: ana, is_primary: false },
+    ]);
   });
 
   it('ensurePrimary gives a stay without a primary guest its holder, and leaves a stay that has one', async () => {
