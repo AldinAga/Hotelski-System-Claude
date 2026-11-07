@@ -252,8 +252,18 @@ describe('product manifest', () => {
     // action). Its entries reach a module only through the routes that use them:
     // each such route must be on a manifest module, and an entry no route uses
     // must be a known reservation, not a typo that silently allows nothing.
-    // user.view is kept for the user list route that phase 1a does not have yet.
-    const RESERVED_SAFE_ACTIONS = ['user.view'];
+    // user.view is kept for the user list route that phase 1a does not have yet;
+    // the 1b actions below get their routes in Tasks 4-9 (in SAFE_MODE_ALLOWED order).
+    const RESERVED_SAFE_ACTIONS = [
+      'user.view',
+      'stay.check_out',
+      'folio.view',
+      'folio.pay',
+      'folio.document',
+      'business_day.close',
+      'legal_profile.view',
+      'message.view',
+    ];
 
     it('SAFE_MODE_ALLOWED actions are served only on manifest modules; unused entries are known', () => {
       const actions = licensedActions(ta.app).filter((a) => SAFE_MODE_ALLOWED.has(a.action));

@@ -57,6 +57,9 @@ export function localDate(at: Date, timezone: string): string {
  *
  * Lock hierarchy. Every transaction takes locks in this order and never
  * backwards, so bookings, blocks and unit changes cannot deadlock:
+ *   0. (phase 1b) the open business_day row (BusinessDayService.lockOpen),
+ *      FOR SHARE for check-in/out, charges, payments and documents, FOR UPDATE
+ *      for the day close; then the reservation row (ReservationsService);
  *   1. the units advisory lock (UNITS_LOCK_KEY; unit and unit-type changes
  *      only), then the unit row (SELECT ... FOR UPDATE), when the caller
  *      touches a unit;

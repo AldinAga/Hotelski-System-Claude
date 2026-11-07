@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
+import { BusinessDayModule } from './business-day/business-day.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { DatabaseModule } from './db/database.module';
 import { GuestsModule } from './guests/guests.module';
@@ -18,7 +19,7 @@ import { UnitsModule } from './units/units.module';
 // the route (@LicensedAction / @Unlicensed). Keep this order: an anonymous
 // caller must get 401, not a licence answer. test/auth.e2e-spec.ts pins it.
 @Module({
-  imports: [DatabaseModule, LicensingModule, AuthModule, InventoryModule, UnitsModule, RatesModule, ReservationsModule, CalendarModule, GuestsModule],
+  imports: [DatabaseModule, LicensingModule, AuthModule, InventoryModule, UnitsModule, RatesModule, ReservationsModule, CalendarModule, GuestsModule, BusinessDayModule],
   controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },

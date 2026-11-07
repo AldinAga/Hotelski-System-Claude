@@ -25,7 +25,7 @@ export type ReservationSource = (typeof RESERVATION_SOURCES)[number];
 export const RESERVATION_STATUSES = ['requested', 'confirmed', 'cancelled', 'no_show'] as const;
 export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
 
-export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled';
+export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled' | 'no_show';
 
 /** The most stays one reservation may hold. */
 export const MAX_STAYS = 20;
@@ -265,7 +265,11 @@ type StayRow = {
  * today, the website and OTA adapters later, all through book.
  *
  * Locks follow the inventory hierarchy (InventoryService), with the
- * reservation row in front of it:
+ * reservation row in front of it. In front of everything (phase 1b, lock
+ * order point 0) is the open business_day row (BusinessDayService.lockOpen):
+ * FOR SHARE for check-in, check-out, charges, payments and documents, FOR
+ * UPDATE only for the day close. book, cancel and assignUnit do not take it,
+ * and nothing takes it after a reservation row.
  *   0. the reservation row (cancel, assignUnit) or the (channel, externalId)
  *      advisory lock (book);
  *   1. unit rows (SELECT ... FOR UPDATE, by id), when stays name a unit;

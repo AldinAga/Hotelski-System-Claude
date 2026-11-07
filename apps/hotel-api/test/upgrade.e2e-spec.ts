@@ -34,4 +34,38 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
     const notes = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM guest WHERE note IS NOT NULL`);
     expect(notes.rows[0].n).toBe(0);
   });
+
+  it('0009: one open business day (the property\'s date at migration), a settings row, and stay status no_show', async () => {
+    const days = await pool.query<{ property_id: string; day: string; status: string }>(
+      'SELECT property_id, day::text AS day, status FROM business_day',
+    );
+    // Oracle: the database's own Belgrade date, not the service's.
+    const { rows: oracle } = await pool.query<{ day: string }>(`SELECT (now() AT TIME ZONE 'Europe/Belgrade')::date::text AS day`);
+    expect(days.rows).toEqual([{ property_id: seed.propertyId, day: oracle[0].day, status: 'open' }]);
+
+    const settings = await pool.query(
+      'SELECT property_id, auto_close_time, no_show_charge, accommodation_vat_bp, array_to_json(vat_rates_bp) AS vat_rates_bp FROM property_settings',
+    );
+    expect(settings.rows).toEqual([
+      { property_id: seed.propertyId, auto_close_time: null, no_show_charge: 'none', accommodation_vat_bp: null, vat_rates_bp: [] },
+    ]);
+
+    // Rolled back: later cases (and tasks) still see the seeded past stay as expected.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const ok = await client.query(`UPDATE stay SET status = 'no_show' WHERE id = $1 RETURNING status`, [seed.pastStayId]);
+      expect(ok.rows).toEqual([{ status: 'no_show' }]);
+      await client.query('SAVEPOINT bad');
+      await expect(client.query(`UPDATE stay SET status = 'gone' WHERE id = $1`, [seed.pastStayId])).rejects.toMatchObject({
+        constraint: 'stay_status_check',
+      });
+      await client.query('ROLLBACK TO SAVEPOINT bad');
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+    const after = await pool.query(`SELECT status, checked_in_at, checked_out_business_date FROM stay WHERE id = $1`, [seed.pastStayId]);
+    expect(after.rows).toEqual([{ status: 'expected', checked_in_at: null, checked_out_business_date: null }]);
+  });
 });

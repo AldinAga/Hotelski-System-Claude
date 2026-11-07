@@ -148,9 +148,29 @@ describe('LicenceGuard', () => {
     }
   });
 
-  it('SAFE_MODE_ALLOWED is exactly the five 1a view actions plus guest.view', () => {
+  it('SAFE_MODE_ALLOWED is exactly the five 1a view actions plus the ten 1b actions', () => {
     expect([...SAFE_MODE_ALLOWED].sort()).toEqual(
-      ['calendar.view', 'guest.view', 'rate.view', 'reservation.view', 'unit.view', 'user.view'],
+      [
+        'business_day.close',
+        'business_day.view',
+        'calendar.view',
+        'folio.document',
+        'folio.pay',
+        'folio.view',
+        'guest.view',
+        'legal_profile.view',
+        'message.view',
+        'rate.view',
+        'reservation.view',
+        'settings.view',
+        'stay.check_out',
+        'unit.view',
+        'user.view',
+      ],
     );
+    // Changes that are not legal or operational necessities stay out (plan Task 3).
+    for (const action of ['stay.check_in', 'guest.manage', 'folio.charge', 'folio.correct', 'settings.manage', 'legal_profile.manage', 'message.resend']) {
+      expect(SAFE_MODE_ALLOWED.has(action)).toBe(false);
+    }
   });
 });
