@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { BusinessDayService } from '../src/business-day/business-day.service';
 import { PropertyContext } from '../src/common/property-context';
 import { startFrontDesk, type FrontDesk } from './front-desk';
@@ -30,7 +31,23 @@ describe('business day (e2e)', () => {
   });
 
   it('ten concurrent first writes open today exactly once', async () => {
-    const days = await Promise.all(Array.from({ length: 10 }, () => open('share')));
+    // A barrier: all ten transactions hold a connection and have begun before any of them
+    // looks for the day. Without it the first one can commit before the pool has opened
+    // the other connections, and the writes no longer race (the ON CONFLICT probe survived).
+    const n = 10;
+    let begun = 0;
+    let go!: () => void;
+    const all = new Promise<void>((r) => (go = r));
+    const days = await Promise.all(
+      Array.from({ length: n }, () =>
+        fd.ta.testDb.db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT 1`);
+          if (++begun === n) go();
+          await all;
+          return svc.lockOpen(tx, pid, 'share');
+        }),
+      ),
+    );
     expect(new Set(days)).toEqual(new Set(['2026-11-02']));
     expect(await fd.sql(`SELECT day::text AS day, status FROM business_day`)).toEqual([
       { day: '2026-11-02', status: 'open' },

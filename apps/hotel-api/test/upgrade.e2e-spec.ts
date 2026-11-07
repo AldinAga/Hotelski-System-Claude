@@ -61,6 +61,10 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
         constraint: 'stay_status_check',
       });
       await client.query('ROLLBACK TO SAVEPOINT bad');
+      // A second open day for the property is refused by the partial unique index.
+      await expect(
+        client.query(`INSERT INTO business_day (property_id, day, status) VALUES ($1, '2000-01-01', 'open')`, [seed.propertyId]),
+      ).rejects.toMatchObject({ constraint: 'business_day_one_open' });
     } finally {
       await client.query('ROLLBACK');
       client.release();
