@@ -304,6 +304,59 @@ describe('night audit (e2e)', () => {
     expect(p.body.businessDate).toBe(inReport === 1_000 ? '2026-11-02' : '2026-11-03');
   });
 
+  it('a close waits for a posting that holds the day FOR SHARE, and reports what it posted', async () => {
+    // A payment in flight, held open by the test: it took the day FOR SHARE (lock order 0),
+    // read business date 2026-11-02 and wrote its row. The close must wait for it (FOR UPDATE)
+    // and then count it; a close that did not wait would report the day without it.
+    // The payment is on the folio of a later stay that the close never locks (its insert
+    // holds that folio row FOR KEY SHARE, which would make a close posting to it wait anyway).
+    await inHouse(0, '2026-11-02', '2026-11-04');
+    const s = await fd.bookStay({ typeId, planId, unitId: unitIds[1] }, '2026-11-05', '2026-11-06');
+    expect((await fd.post(`/stays/${s.stayId}/folio/payments`, { method: 'card', amountMinor: 500, key: 'pay-deposit-1' })).status).toBe(201);
+    const pid = await fd.app.get(PropertyContext).id();
+    const [{ id: folioId }] = await fd.sql<{ id: string }>('SELECT id FROM folio WHERE stay_id = $1', [s.stayId]);
+    const holder = await fd.ta.testDb.pool.connect();
+    let closing: Promise<{ status: number; body: { report: { paymentsByMethodMinor: Record<string, number> } } }> | null = null;
+    let waited = false;
+    try {
+      await holder.query('BEGIN');
+      const { rows } = await holder.query<{ day: string }>(
+        `SELECT day::text AS day FROM business_day WHERE property_id = $1 AND status = 'open' FOR SHARE`,
+        [pid],
+      );
+      await holder.query(
+        `INSERT INTO payment (property_id, folio_id, method, amount_minor, business_date, idempotency_key, request_hash)
+         VALUES ($1, $2, 'cash', 1000, $3::date, 'held-pay-0001', 'held')`,
+        [pid, folioId, rows[0].day],
+      );
+      let done = false;
+      closing = Promise.resolve(close('2026-11-02')).then((r) => {
+        done = true;
+        return r;
+      });
+      const deadline = Date.now() + 3_000;
+      while (!done && Date.now() < deadline) {
+        const [{ w }] = await fd.sql<{ w: number }>(
+          `SELECT count(*)::int AS w FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+        );
+        if (w >= 1) {
+          waited = true;
+          break;
+        }
+        await new Promise<void>((r) => setTimeout(r, 20));
+      }
+    } finally {
+      await holder.query('COMMIT');
+      holder.release();
+    }
+    const res = await closing!;
+    expect({ waited, status: res.status, cash: res.body.report.paymentsByMethodMinor.cash }).toEqual({
+      waited: true,
+      status: 200,
+      cash: 1000,
+    });
+  });
+
   it('a night that cannot be posted (no stay_night row) is 409 close_failed and the day stays open', async () => {
     const s = await inHouse(0, '2026-11-02', '2026-11-04');
     await fd.sql(`DELETE FROM stay_night WHERE stay_id = $1 AND day = '2026-11-02'`, [s.stayId]);
