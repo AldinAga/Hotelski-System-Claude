@@ -715,11 +715,23 @@ export class FolioService {
     return view;
   }
 
-  private async unpostedNights(tx: Tx, propertyId: string, stayId: string): Promise<Array<{ night: string; priceMinor: number }>> {
+  /**
+   * The stay's agreed nights (stay_night) priced above 0 that have no
+   * accommodation line yet, by night; with `before`, only nights before that
+   * day. The folio view lists them; check-out and its preview post them
+   * (StayLifecycleService), so both read the same rule.
+   */
+  async unpostedNights(
+    tx: Tx,
+    propertyId: string,
+    stayId: string,
+    before?: string,
+  ): Promise<Array<{ night: string; priceMinor: number }>> {
     const { rows } = await tx.execute<{ night: string; price_minor: string }>(sql`
       SELECT n.day::text AS night, n.price_minor::text AS price_minor
         FROM stay_night n
        WHERE n.property_id = ${propertyId} AND n.stay_id = ${stayId} AND n.price_minor > 0
+         ${before === undefined ? sql`` : sql`AND n.day < ${before}::date`}
          AND NOT EXISTS (
                SELECT 1 FROM folio_line l JOIN folio f ON f.id = l.folio_id AND f.property_id = l.property_id
                 WHERE f.property_id = n.property_id AND f.stay_id = n.stay_id

@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { BusinessDayService } from '../src/business-day/business-day.service';
+import { PropertyContext } from '../src/common/property-context';
+import { FolioService } from '../src/folio/folio.service';
 import { NOW, startFrontDesk, type FrontDesk } from './front-desk';
 
 describe('check-in and check-out (e2e)', () => {
@@ -250,6 +254,72 @@ describe('check-in and check-out (e2e)', () => {
     }
     expect((await fd.post('/reservations', body('2026-11-03', '2026-11-04'))).status).toBe(201);
     expect((await fd.post('/reservations/quote', body('2026-11-03', '2026-11-04'))).status).toBe(200);
+  });
+
+  it('the preview leaves out a night that is already posted, in nightsToPost and in balanceMinor', async () => {
+    const s = await inHouse('2026-11-02', '2026-11-04');
+    // The night audit's posting (Task 6), done here through the service as the folio spec does.
+    const pid = await fd.app.get(PropertyContext).id();
+    const days = fd.app.get(BusinessDayService);
+    const folio = fd.app.get(FolioService);
+    const posted = await fd.ta.testDb.db.transaction(async (tx) => {
+      const businessDate = await days.lockOpen(tx, pid, 'share');
+      const f = await folio.ensureFolio(tx, pid, s.stayId);
+      return folio.postNight(tx, pid, f.id, { id: s.stayId }, '2026-11-02', businessDate, 'night_audit');
+    });
+    expect(posted).toBe(true);
+    expect((await fd.get(`/stays/${s.stayId}/check-out-preview`)).body).toEqual({
+      businessDate: '2026-11-02',
+      keptUntil: '2026-11-03',
+      earlyDeparture: true,
+      nightsToPost: [],
+      nightsToRelease: ['2026-11-03'],
+      balanceMinor: 1_000_000, // the posted night once, not twice
+    });
+    await fd.post(`/stays/${s.stayId}/folio/payments`, { method: 'card', amountMinor: 1_000_000, key: 'pay-posted-001' });
+    expect((await fd.post(`/stays/${s.stayId}/check-out`, { version: s.version })).status).toBe(200);
+    expect(await fd.sql(`SELECT night::text AS night, source_type FROM folio_line`)).toEqual([
+      { night: '2026-11-02', source_type: 'night_audit' },
+    ]);
+  });
+
+  it('an unknown stay id is 404 stay_not_found on check-in, the preview and check-out', async () => {
+    const id = randomUUID();
+    const answers = [
+      await fd.post(`/stays/${id}/check-in`, { version: 1 }),
+      await fd.get(`/stays/${id}/check-out-preview`),
+      await fd.post(`/stays/${id}/check-out`, { version: 1 }),
+    ];
+    expect(answers.map((r) => [r.status, r.body.code])).toEqual([
+      [404, 'stay_not_found'],
+      [404, 'stay_not_found'],
+      [404, 'stay_not_found'],
+    ]);
+  });
+
+  it('a stay id that is not a UUID is 404 stay_not_found on check-in, the preview and check-out', async () => {
+    const answers = [
+      await fd.post('/stays/not-a-uuid/check-in', { version: 1 }),
+      await fd.get('/stays/not-a-uuid/check-out-preview'),
+      await fd.post('/stays/not-a-uuid/check-out', { version: 1 }),
+    ];
+    expect(answers.map((r) => [r.status, r.body.code])).toEqual([
+      [404, 'stay_not_found'],
+      [404, 'stay_not_found'],
+      [404, 'stay_not_found'],
+    ]);
+  });
+
+  it('a missing or invalid version is 422 validation_failed naming version, on check-in and check-out', async () => {
+    const b = await fd.bookStay({ typeId, planId, unitId: unitIds[0] }, '2026-11-02', '2026-11-03');
+    const s = await inHouse('2026-11-02', '2026-11-03', 1);
+    for (const body of [{}, { version: '1' }, { version: 0 }, { version: 1.5 }]) {
+      const checkIn = await fd.post(`/stays/${b.stayId}/check-in`, body);
+      const checkOut = await fd.post(`/stays/${s.stayId}/check-out`, body);
+      expect([body, checkIn.status, checkIn.body.code, checkIn.body.details]).toEqual([body, 422, 'validation_failed', { field: 'version' }]);
+      expect([body, checkOut.status, checkOut.body.code, checkOut.body.details]).toEqual([body, 422, 'validation_failed', { field: 'version' }]);
+    }
+    expect([await stayStatus(b.stayId), await stayStatus(s.stayId)]).toEqual([{ status: 'expected' }, { status: 'in_house' }]);
   });
 
   it('housekeeping: 403 on check-in, the check-out preview and check-out', async () => {

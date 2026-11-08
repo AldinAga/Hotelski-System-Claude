@@ -74,12 +74,6 @@ function daysOf(from: string, to: string): string[] {
   return out;
 }
 
-function minorFrom(raw: string): number {
-  const n = Number(raw);
-  if (!Number.isSafeInteger(n)) throw new Error(`stays: amount ${raw} is not a safe integer`);
-  return n;
-}
-
 @Injectable()
 export class StayLifecycleService {
   constructor(
@@ -175,7 +169,7 @@ export class StayLifecycleService {
         // An in-house stay implies an opened day (check-in took it); today is the fallback a GET may show.
         const businessDate = open[0]?.day ?? (await this.inventory.today(tx, propertyId));
         const plan = this.plan(s, businessDate);
-        const nightsToPost = await this.nightsToPost(tx, propertyId, stayId, plan.keptUntil);
+        const nightsToPost = await this.folio.unpostedNights(tx, propertyId, stayId, plan.keptUntil);
         const { rows: folios } = await tx.execute<{ id: string }>(sql`
           SELECT id FROM folio WHERE property_id = ${propertyId} AND stay_id = ${stayId}`);
         const current = folios[0] ? (await this.folio.balanceOf(tx, folios[0].id)).balanceMinor : 0;
@@ -223,7 +217,7 @@ export class StayLifecycleService {
       const folio = await this.folio.ensureFolio(tx, propertyId, stayId);
       if (folio.status !== 'open') throw new Error(`stays: in-house stay ${stayId} has a closed folio`);
       const postedNights: string[] = [];
-      for (const { night } of await this.nightsToPost(tx, propertyId, stayId, keptUntil)) {
+      for (const { night } of await this.folio.unpostedNights(tx, propertyId, stayId, keptUntil)) {
         if (await this.folio.postNight(tx, propertyId, folio.id, { id: stayId }, night, businessDate, 'check_out')) {
           postedNights.push(night);
         }
@@ -274,25 +268,6 @@ export class StayLifecycleService {
     const keptUntil = businessDate > minimum ? businessDate : minimum;
     const earlyDeparture = keptUntil < s.departure;
     return { keptUntil, earlyDeparture, nightsToRelease: earlyDeparture ? daysOf(keptUntil, s.departure) : [] };
-  }
-
-  /** The agreed nights before `keptUntil` that have no accommodation line yet and a price above 0, by night. */
-  private async nightsToPost(
-    tx: Tx,
-    propertyId: string,
-    stayId: string,
-    keptUntil: string,
-  ): Promise<Array<{ night: string; priceMinor: number }>> {
-    const { rows } = await tx.execute<{ night: string; price_minor: string }>(sql`
-      SELECT n.day::text AS night, n.price_minor::text AS price_minor
-        FROM stay_night n
-       WHERE n.property_id = ${propertyId} AND n.stay_id = ${stayId} AND n.day < ${keptUntil}::date AND n.price_minor > 0
-         AND NOT EXISTS (
-               SELECT 1 FROM folio_line l JOIN folio f ON f.id = l.folio_id AND f.property_id = l.property_id
-                WHERE f.property_id = n.property_id AND f.stay_id = n.stay_id
-                  AND l.kind = 'accommodation' AND l.night = n.day)
-       ORDER BY n.day`);
-    return rows.map((r) => ({ night: r.night, priceMinor: minorFrom(r.price_minor) }));
   }
 
   /** Lock order point 1: the stay's reservation FOR UPDATE; 404 stay_not_found. */
