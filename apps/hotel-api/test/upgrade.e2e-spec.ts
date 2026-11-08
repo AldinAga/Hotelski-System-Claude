@@ -72,4 +72,39 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
     const after = await pool.query(`SELECT status, checked_in_at, checked_out_business_date FROM stay WHERE id = $1`, [seed.pastStayId]);
     expect(after.rows).toEqual([{ status: 'expected', checked_in_at: null, checked_out_business_date: null }]);
   });
+
+  it('0010: the folio tables exist and are empty (folios are created lazily); lines and payments are append-only', async () => {
+    for (const table of ['folio', 'folio_line', 'payment']) {
+      const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
+      expect({ table, n: rows[0].n }).toEqual({ table, n: 0 });
+    }
+    // A 1a stay takes a folio, a line and a payment; rolled back so later cases see empty tables.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const folio = await client.query<{ id: string }>(
+        `INSERT INTO folio (property_id, stay_id, reservation_id) VALUES ($1, $2, $3) RETURNING id`,
+        [seed.propertyId, seed.pastStayId, seed.pastReservationId],
+      );
+      await client.query(
+        `INSERT INTO folio_line (property_id, folio_id, kind, description, amount_minor, business_date, source_type)
+         VALUES ($1, $2, 'service', 'Mini bar', 1000, '2026-11-02', 'manual')`,
+        [seed.propertyId, folio.rows[0].id],
+      );
+      await client.query(
+        `INSERT INTO payment (property_id, folio_id, method, amount_minor, business_date, idempotency_key, request_hash)
+         VALUES ($1, $2, 'cash', 1000, '2026-11-02', 'upgrade-key-1', 'h')`,
+        [seed.propertyId, folio.rows[0].id],
+      );
+      await client.query('SAVEPOINT change');
+      await expect(client.query(`UPDATE payment SET amount_minor = 1`)).rejects.toThrow(/append_only/);
+      await client.query('ROLLBACK TO SAVEPOINT change');
+      await expect(client.query(`DELETE FROM folio_line`)).rejects.toThrow(/append_only/);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+    const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM folio`);
+    expect(rows[0].n).toBe(0);
+  });
 });

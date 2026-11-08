@@ -73,12 +73,14 @@ export interface FrontDesk {
 
 export const DEFAULT_HOLDER = { firstName: 'Petar', lastName: 'Petrović', email: 'petar@example.com' };
 
-export async function startFrontDesk(): Promise<FrontDesk> {
+/** `poolMax`: the app's pool client limit, for suites whose race tests hold more than nine transactions (Ruling 27a). */
+export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<FrontDesk> {
   const fake = await startFakeCentralAdmin();
   let now = NOW;
   let licenceShiftMs = 0;
   let planId: string | null = null;
   const ta = await createTestApp({
+    poolMax: opts.poolMax,
     clock: () => now,
     licensing: {
       client: new CentralAdminClient({ baseUrl: fake.url, allowHttp: true }),

@@ -49,11 +49,13 @@ export async function createScratchPool(name: string): Promise<Pool> {
 }
 
 // One database per Jest worker, created and migrated once per worker process.
-export async function createTestDb(): Promise<TestDb> {
+// `poolMax` raises the pool's client limit (pg default 10) for a suite whose
+// race tests hold more transactions open at once (Ruling 27a).
+export async function createTestDb(opts: { poolMax?: number } = {}): Promise<TestDb> {
   const name = `hotel_test_${process.env.JEST_WORKER_ID ?? '1'}`;
   await ensureDatabase(name);
   const connectionString = urlFor(name);
-  const pool = new Pool({ connectionString });
+  const pool = new Pool({ connectionString, ...(opts.poolMax ? { max: opts.poolMax } : {}) });
   await migrate(pool);
   const db = drizzle(pool, { schema });
   return {

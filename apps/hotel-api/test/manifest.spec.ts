@@ -257,8 +257,6 @@ describe('product manifest', () => {
     const RESERVED_SAFE_ACTIONS = [
       'user.view',
       'stay.check_out',
-      'folio.view',
-      'folio.pay',
       'folio.document',
       'business_day.close',
       'legal_profile.view',

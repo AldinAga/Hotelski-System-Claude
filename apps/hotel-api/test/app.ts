@@ -28,6 +28,8 @@ export interface TestAppOptions {
    * The object is read at every login, so a spec may change it between tests.
    */
   turnstile?: TurnstileConfig | null;
+  /** The test pool's client limit (default pg's 10); see createTestDb. */
+  poolMax?: number;
 }
 
 export interface TestApp {
@@ -44,7 +46,7 @@ export interface TestApp {
 // Boots the application on the worker's test database, wired like main.ts
 // (same HTTP hardening and global filter). The app runs on testDb's pool: closing the app ends it.
 export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp> {
-  const testDb = await createTestDb();
+  const testDb = await createTestDb({ poolMax: opts.poolMax });
   let builder = Test.createTestingModule({
     imports: [AppModule, DiscoveryModule],
     controllers: opts.controllers ?? [],
