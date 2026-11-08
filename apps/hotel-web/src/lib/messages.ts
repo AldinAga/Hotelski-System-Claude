@@ -88,6 +88,7 @@ export const MESSAGES: Record<string, string> = {
   bad_date: 'Neispravan datum.',
   departure_not_after_arrival: 'Datum odlaska mora biti posle datuma dolaska.',
   arrival_in_past: 'Datum dolaska ne može biti u prošlosti.',
+  arrival_before_business_date: 'Datum dolaska je pre otvorenog poslovnog dana. Izaberite dolazak od poslovnog dana nadalje.',
   too_long: 'Boravak može trajati najviše 365 noći.',
   unit_taken: 'Jedinica je već zauzeta u tom periodu.',
   unit_blocked: 'Jedinica je blokirana u tom periodu.',

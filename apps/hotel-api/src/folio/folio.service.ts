@@ -106,6 +106,20 @@ export class NightWithoutPrice extends Error {
   }
 }
 
+/**
+ * postNight was given a folio that is not the open folio of the stay (another
+ * stay's, or closed): a caller bug (Ruling 31), never a user error.
+ */
+export class FolioNotOpen extends Error {
+  constructor(
+    readonly folioId: string,
+    readonly stayId: string,
+  ) {
+    super(`folio: ${folioId} is not the open folio of stay ${stayId}`);
+    this.name = 'FolioNotOpen';
+  }
+}
+
 /** 100.000.000,00 RSD. */
 export const MAX_AMOUNT_MINOR = 10_000_000_000;
 const CURRENCY = 'RSD';
@@ -258,7 +272,8 @@ export class FolioService {
    * accommodation VAT of the settings. At most once per folio and night
    * (folio_line_night): returns false when the night was already posted, or
    * is priced 0 (amount_minor <> 0). A night without a stay_night row throws
-   * NightWithoutPrice. Call under the shared business-day lock with the
+   * NightWithoutPrice; a folio that is not the stay's open folio throws
+   * FolioNotOpen (Ruling 31). Call under the shared business-day lock with the
    * folio locked; `businessDate` is what lockOpen returned.
    */
   async postNight(
@@ -279,14 +294,23 @@ export class FolioService {
     const { accommodationVatBp } = await this.settings.read(tx, propertyId);
     // source_id (preflight F23c): the business day for the night audit, the stay otherwise.
     const sourceId = source === 'night_audit' ? businessDate : stay.id;
+    // Only into the open folio of this stay (Ruling 31): a folio of another
+    // stay or a closed one gets no row, and the check below refuses it.
     const { rows: inserted } = await tx.execute(sql`
       INSERT INTO folio_line (property_id, folio_id, kind, description, amount_minor, vat_rate_bp, business_date, night,
                               source_type, source_id)
-      VALUES (${propertyId}, ${folioId}, 'accommodation', ${nightDescription(night)}, ${price}, ${accommodationVatBp}::int,
-              ${businessDate}::date, ${night}::date, ${source}, ${sourceId})
+      SELECT f.property_id, f.id, 'accommodation', ${nightDescription(night)}, ${price}, ${accommodationVatBp}::int,
+             ${businessDate}::date, ${night}::date, ${source}, ${sourceId}
+        FROM folio f
+       WHERE f.id = ${folioId} AND f.property_id = ${propertyId} AND f.stay_id = ${stay.id} AND f.status = 'open'
       ON CONFLICT (folio_id, night) WHERE kind = 'accommodation' DO NOTHING
       RETURNING id`);
-    return inserted.length > 0;
+    if (inserted.length > 0) return true;
+    const { rows: own } = await tx.execute(sql`
+      SELECT 1 FROM folio
+       WHERE id = ${folioId} AND property_id = ${propertyId} AND stay_id = ${stay.id} AND status = 'open'`);
+    if (!own[0]) throw new FolioNotOpen(folioId, stay.id);
+    return false;
   }
 
   // ---- reading ----
@@ -666,7 +690,7 @@ export class FolioService {
         FROM folio_line l
         LEFT JOIN folio_line r ON r.reverses_line_id = l.id AND r.property_id = l.property_id
        WHERE l.property_id = ${propertyId} AND ${where}
-       ORDER BY l.created_at, l.id`);
+       ORDER BY l.created_at, l.night NULLS LAST, l.id`);
     return rows.map(lineView);
   }
 

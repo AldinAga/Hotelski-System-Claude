@@ -1,6 +1,6 @@
 import { BusinessDayService } from '../src/business-day/business-day.service';
 import { PropertyContext } from '../src/common/property-context';
-import { FolioService, NightWithoutPrice } from '../src/folio/folio.service';
+import { FolioNotOpen, FolioService, NightWithoutPrice } from '../src/folio/folio.service';
 import { startFrontDesk, type FrontDesk } from './front-desk';
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -33,44 +33,7 @@ describe('folio (e2e)', () => {
     fd.post(`/stays/${stayId}/folio/payments`, { method, amountMinor, key });
   const folio = async () => (await fd.get(`/stays/${stayId}/folio`)).body;
 
-  /**
-   * Fires `n` requests while the test holds the open business day FOR UPDATE, waits
-   * until all `n` wait on that lock, then releases it: every request then races for the
-   * folio at once (Ruling 27). The wait races a deadline (Ruling 27a) and the lock is
-   * released in finally (Ruling 28).
-   */
-  async function raceUnderHeldDay<T>(n: number, fire: () => Array<PromiseLike<T>>): Promise<T[]> {
-    const days = fd.app.get(BusinessDayService);
-    await fd.ta.testDb.db.transaction((tx) => days.lockOpen(tx, pid, 'share')); // the day row exists, committed
-    const holder = await fd.ta.testDb.pool.connect();
-    let all: Promise<T[]> | null = null;
-    let waitError: unknown = null;
-    try {
-      await holder.query('BEGIN');
-      const { rows } = await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
-      await holder.query(`SELECT 1 FROM business_day WHERE property_id = $1 AND status = 'open' FOR UPDATE`, [pid]);
-      all = Promise.all(fire());
-      const deadline = Date.now() + 5_000;
-      for (;;) {
-        const [{ waiting }] = await fd.sql<{ waiting: number }>(
-          `SELECT count(*)::int AS waiting FROM pg_stat_activity
-            WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> $1`,
-          [rows[0].pid],
-        );
-        if (waiting >= n) break;
-        if (Date.now() > deadline) throw new Error(`barrier: only ${waiting} of ${n} requests waited on the business day`);
-        await delay(20);
-      }
-    } catch (err) {
-      waitError = err;
-    } finally {
-      await holder.query('COMMIT');
-      holder.release();
-    }
-    const results = all ? await all : [];
-    if (waitError) throw waitError;
-    return results;
-  }
+  const raceUnderHeldDay = <T>(n: number, fire: () => Array<PromiseLike<T>>) => fd.raceUnderHeldDay(n, fire);
 
   it('GET before any write shows an empty folio and creates nothing', async () => {
     expect(await folio()).toMatchObject({ id: null, status: 'none', balanceMinor: 0, lines: [], payments: [] });
@@ -501,6 +464,33 @@ describe('folio (e2e)', () => {
       expect(await fd.sql('SELECT 1 FROM folio_line')).toHaveLength(0);
       // 11-02 at 0 is never posted, so it is not listed as unposted either; 11-03 has no row.
       expect((await folio()).unpostedNights).toEqual([]);
+    });
+
+    // Ruling 31: a night goes only into the open folio of its own stay. One fixture per predicate.
+    const postInto = (folioOf: string, night: string) => {
+      const days = fd.app.get(BusinessDayService);
+      const svc = fd.app.get(FolioService);
+      return fd.ta.testDb.db.transaction(async (tx) => {
+        const businessDate = await days.lockOpen(tx, pid, 'share');
+        const f = await svc.ensureFolio(tx, pid, folioOf);
+        return svc.postNight(tx, pid, f.id, { id: stayId }, night, businessDate, 'check_out');
+      });
+    };
+
+    it("postNight refuses another stay's folio: FolioNotOpen and no line", async () => {
+      const other = await fd.bookStay({ typeId, planId }, '2026-11-02', '2026-11-03');
+      const err = await postInto(other.stayId, '2026-11-02').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FolioNotOpen);
+      expect(err).toMatchObject({ stayId });
+      expect(await fd.sql('SELECT 1 FROM folio_line')).toHaveLength(0);
+    });
+
+    it('postNight refuses a closed folio of the stay: FolioNotOpen and no line', async () => {
+      await pay(1_000, 'pay-opens-folio');
+      await fd.sql(`UPDATE folio SET status = 'closed', closed_at = now() WHERE stay_id = $1`, [stayId]);
+      const err = await postInto(stayId, '2026-11-02').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FolioNotOpen);
+      expect(await fd.sql('SELECT 1 FROM folio_line')).toHaveLength(0);
     });
   });
 });

@@ -126,8 +126,15 @@ const unitNotFound = (details?: Record<string, unknown>) =>
   new DomainError('unit_not_found', 'Jedinica ne postoji.', 404, details);
 const unitTaken = () =>
   new DomainError('unit_taken', 'Jedinica je već zauzeta u tom periodu.', 409);
-const versionConflict = (version: number) =>
+/** 409 version_conflict naming the reservation's current version (also check-in and check-out). */
+export const versionConflict = (version: number) =>
   new DomainError('version_conflict', 'Rezervaciju je u međuvremenu neko izmenio; osvežite prikaz.', 409, { version });
+
+/** The `version` a change sends: an integer ≥ 1, otherwise 422 naming version. */
+export function versionOf(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) throw validationFailed('version');
+  return v;
+}
 
 const STAY_DATE_MESSAGES: Record<StayDatesReason, string> = {
   bad_date: 'Neispravan datum.',
@@ -219,14 +226,14 @@ export function parseBookInput(raw: unknown): BookInput {
 }
 
 /** A stay's inventory scope, from what the stay stores (see migration 0007). */
-function scopeOfStay(s: { unit_type_id: string | null; unit_id: string | null }): Scope {
+export function scopeOfStay(s: { unit_type_id: string | null; unit_id: string | null }): Scope {
   if (s.unit_type_id) return { kind: 'unit_type', id: s.unit_type_id };
   if (s.unit_id) return { kind: 'unit', id: s.unit_id };
   throw new Error('reservations: stay without unit type and unit');
 }
 
 /** Scope order first, then arrival: the order in which a transaction takes or gives back nights. */
-function inventoryOrder<T extends { scope: Scope; arrival: string }>(items: T[]): T[] {
+export function inventoryOrder<T extends { scope: Scope; arrival: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => scopeOrder(a.scope, b.scope) || (a.arrival < b.arrival ? -1 : a.arrival > b.arrival ? 1 : 0));
 }
 
@@ -427,6 +434,26 @@ export class ReservationsService {
       const r = validateStayDates(s.arrival, s.departure, today);
       if (!r.ok) throw new DomainError(r.reason, STAY_DATE_MESSAGES[r.reason], 422, { field: r.field, stay: i });
     });
+    // Phase 1b: an arrival before the open business day could never be checked
+    // in (check-in needs arrival = business date) and would silently become a
+    // no-show; after an evening close that is "today". Read with a plain
+    // SELECT: book and quote take no business-day lock and write nothing here;
+    // without a row (no day opened yet) there is nothing to check.
+    const { rows: open } = await tx.execute<{ day: string }>(sql`
+      SELECT day::text AS day FROM business_day WHERE property_id = ${propertyId} AND status = 'open'`);
+    const businessDate = open[0]?.day;
+    if (businessDate !== undefined) {
+      data.stays.forEach((s, i) => {
+        if (s.arrival < businessDate) {
+          throw new DomainError(
+            'arrival_before_business_date',
+            `Datum dolaska je pre otvorenog poslovnog dana (${businessDate}).`,
+            422,
+            { arrival: s.arrival, businessDate, stay: i },
+          );
+        }
+      });
+    }
 
     const units = new Map<string, UnitRow>();
     for (const unitId of [...new Set(data.stays.flatMap((s) => (s.unitId ? [s.unitId] : [])))].sort()) {
@@ -512,7 +539,7 @@ export class ReservationsService {
 
   async cancel(id: string, expectedVersion: unknown, actor: Actor): Promise<{ id: string; status: 'cancelled'; version: number }> {
     if (!isUuid(id)) throw reservationNotFound();
-    const version = this.versionOf(expectedVersion);
+    const version = versionOf(expectedVersion);
     const propertyId = await this.property.id();
 
     return this.db.transaction(async (tx) => {
@@ -569,7 +596,7 @@ export class ReservationsService {
     if (!isUuid(stayId)) throw stayNotFound();
     if (typeof unitId !== 'string' || !isUuid(unitId)) throw validationFailed('unitId');
     const unit = unitId.toLowerCase();
-    const version = this.versionOf(expectedVersion);
+    const version = versionOf(expectedVersion);
     const propertyId = await this.property.id();
 
     try {
@@ -782,11 +809,6 @@ export class ReservationsService {
   }
 
   // ---- helpers ----
-
-  private versionOf(v: unknown): number {
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) throw validationFailed('version');
-    return v;
-  }
 
   private async lockReservation(
     tx: Tx,

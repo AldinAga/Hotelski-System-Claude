@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import type { LicensePayload } from '@platform/licensing';
 import request from 'supertest';
+import { BusinessDayService } from '../src/business-day/business-day.service';
+import { PropertyContext } from '../src/common/property-context';
 import { ActivationService } from '../src/licensing/activation.service';
 import { CentralAdminClient } from '../src/licensing/central-admin.client';
 import { LicenceService } from '../src/licensing/licence.service';
@@ -66,6 +68,18 @@ export interface FrontDesk {
     departure: string,
     extra?: { holder?: object; adults?: number; children?: number },
   ): Promise<{ reservationId: string; stayId: string; version: number }>;
+  /**
+   * Books one stay on `t.unitId` (required) and checks it in through
+   * POST /stays/:id/check-in; `version` is the reservation's after check-in.
+   */
+  inHouse(t: Target, arrival: string, departure: string): Promise<{ reservationId: string; stayId: string; version: number }>;
+  /**
+   * Fires `n` requests while the test holds the open business day FOR UPDATE, waits
+   * until all `n` wait on a lock, then releases it: every request then races for the
+   * rows behind the day at once (Ruling 27). The wait races a deadline (Ruling 27a)
+   * and the day is released in finally (Ruling 28). Opens the day first when needed.
+   */
+  raceUnderHeldDay<T>(n: number, fire: () => Array<PromiseLike<T>>): Promise<T[]>;
   /** A query on the test database (outside the app). */
   sql<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
   close(): Promise<void>;
@@ -181,6 +195,48 @@ export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<F
         [reservationId],
       );
       return { reservationId, stayId: rows[0].stay_id, version: rows[0].version };
+    },
+
+    async inHouse(t, arrival, departure) {
+      if (!t.unitId) throw new Error('front-desk: inHouse needs a unitId (check-in requires a unit)');
+      const b = await fd.bookStay(t, arrival, departure);
+      const res = await fd.post(`/stays/${b.stayId}/check-in`, { version: b.version });
+      if (res.status !== 200) throw new Error(`front-desk: check-in ${res.status} ${JSON.stringify(res.body)}`);
+      return { ...b, version: res.body.version as number };
+    },
+
+    async raceUnderHeldDay<T>(n: number, fire: () => Array<PromiseLike<T>>): Promise<T[]> {
+      const pid = await app.get(PropertyContext).id();
+      const days = app.get(BusinessDayService);
+      await ta.testDb.db.transaction((tx) => days.lockOpen(tx, pid, 'share')); // the day row exists, committed
+      const holder = await ta.testDb.pool.connect();
+      let all: Promise<T[]> | null = null;
+      let waitError: unknown = null;
+      try {
+        await holder.query('BEGIN');
+        const { rows } = await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+        await holder.query(`SELECT 1 FROM business_day WHERE property_id = $1 AND status = 'open' FOR UPDATE`, [pid]);
+        all = Promise.all(fire());
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const [{ waiting }] = await fd.sql<{ waiting: number }>(
+            `SELECT count(*)::int AS waiting FROM pg_stat_activity
+              WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> $1`,
+            [rows[0].pid],
+          );
+          if (waiting >= n) break;
+          if (Date.now() > deadline) throw new Error(`barrier: only ${waiting} of ${n} requests waited on the business day`);
+          await new Promise<void>((r) => setTimeout(r, 20));
+        }
+      } catch (err) {
+        waitError = err;
+      } finally {
+        await holder.query('COMMIT');
+        holder.release();
+      }
+      const results = all ? await all : [];
+      if (waitError) throw waitError;
+      return results;
     },
 
     async sql<T>(text: string, params?: unknown[]) {

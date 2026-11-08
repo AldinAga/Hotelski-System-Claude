@@ -256,7 +256,6 @@ describe('product manifest', () => {
     // the 1b actions below get their routes in Tasks 4-9 (in SAFE_MODE_ALLOWED order).
     const RESERVED_SAFE_ACTIONS = [
       'user.view',
-      'stay.check_out',
       'folio.document',
       'business_day.close',
       'legal_profile.view',
