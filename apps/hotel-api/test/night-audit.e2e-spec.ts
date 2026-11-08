@@ -235,9 +235,10 @@ describe('night audit (e2e)', () => {
       const [r1, r2] = await queuedBehindReservation(b.reservationId, first, second);
       const [c, x] = k % 2 === 0 ? [r1, r2] : [r2, r1];
       const [{ status }] = await fd.sql<{ status: string }>('SELECT status FROM stay WHERE id = $1', [b.stayId]);
+      // The night of this stay: given back exactly once, whichever request won.
       const [{ sold }] = await fd.sql<{ sold: number }>(
-        `SELECT min(sold)::int AS sold FROM inventory_day WHERE scope_id = $1`,
-        [typeId],
+        `SELECT sold FROM inventory_day WHERE scope_id = $1 AND day = $2::date`,
+        [typeId, day],
       );
       const seen = { k, close: x.status, cancel: c.status, status, sold };
       expect(seen).toEqual({
