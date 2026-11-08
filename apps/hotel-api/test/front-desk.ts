@@ -39,6 +39,12 @@ export interface FrontDesk {
   managerId: string;
   /** The application clock (CLOCK). */
   setNow(at: Date): void;
+  /**
+   * Moves the application clock and signs the four roles in again: sessions
+   * run on CLOCK and expire after 12 idle hours, so a test that moves the
+   * clock past that needs fresh cookies (same users).
+   */
+  travel(at: Date): Promise<void>;
   /** The licence clock, for safe mode: shiftLicence(400 * DAY_MS) is past valid_until and grace_until. */
   shiftLicence(ms: number): void;
   /**
@@ -93,6 +99,7 @@ export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<F
   let now = NOW;
   let licenceShiftMs = 0;
   let planId: string | null = null;
+  let userIds: Record<'owner' | 'manager' | 'receptionist' | 'housekeeping', string> | null = null;
   const ta = await createTestApp({
     poolMax: opts.poolMax,
     clock: () => now,
@@ -118,6 +125,14 @@ export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<F
     setNow(at) {
       now = at;
     },
+    async travel(at) {
+      now = at;
+      if (!userIds) throw new Error('front-desk: travel before reset');
+      fd.owner = await sessionCookieFor(app, userIds.owner);
+      fd.manager = await sessionCookieFor(app, userIds.manager);
+      fd.receptionist = await sessionCookieFor(app, userIds.receptionist);
+      fd.housekeeping = await sessionCookieFor(app, userIds.housekeeping);
+    },
     shiftLicence(ms) {
       licenceShiftMs = ms;
     },
@@ -141,12 +156,16 @@ export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<F
         const u = await seedUser(ta.testDb, role);
         return { id: u.id, cookie: await sessionCookieFor(app, u.id) };
       };
-      fd.owner = (await cookie('owner')).cookie;
+      const o = await cookie('owner');
+      fd.owner = o.cookie;
       const m = await cookie('manager');
       fd.manager = m.cookie;
       fd.managerId = m.id;
-      fd.receptionist = (await cookie('receptionist')).cookie;
-      fd.housekeeping = (await cookie('housekeeping')).cookie;
+      const r = await cookie('receptionist');
+      fd.receptionist = r.cookie;
+      const h = await cookie('housekeeping');
+      fd.housekeeping = h.cookie;
+      userIds = { owner: o.id, manager: m.id, receptionist: r.id, housekeeping: h.id };
     },
     get: (path, cookie = fd.receptionist) => request(server()).get(path).set('Cookie', cookie),
     post: (path, body = {}, cookie = fd.receptionist) => request(server()).post(path).set('Cookie', cookie).send(body),

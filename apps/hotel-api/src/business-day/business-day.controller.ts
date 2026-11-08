@@ -8,7 +8,7 @@ import { SettingsService, type PropertySettings } from './settings.service';
 // Both are hotel.folio (preflight F29): the business day, the automatic close
 // and the VAT rates belong to the folio. Reading works in safe mode
 // (business_day.view, settings.view); changing settings does not. Closing the
-// day (POST /business-day/close) arrives with the night audit (Task 6).
+// day (POST /business-day/close) and the closed days are NightAuditController.
 
 @Controller('business-day')
 @Roles('owner', 'manager', 'receptionist')

@@ -136,7 +136,7 @@ export class CalendarService {
             FROM stay s
             JOIN reservation r ON r.property_id = s.property_id AND r.id = s.reservation_id
             JOIN guest g ON g.property_id = r.property_id AND g.id = r.holder_guest_id
-           WHERE s.property_id = ${propertyId} AND s.status <> 'cancelled' AND r.status <> 'cancelled'
+           WHERE s.property_id = ${propertyId} AND s.status NOT IN ('cancelled', 'no_show') AND r.status NOT IN ('cancelled', 'no_show')
              AND s.arrival < ${to}::date AND s.departure > ${from}::date
           UNION ALL
           SELECT 'block', b.id, NULL::uuid, NULL::text, NULL::text, b.unit_id, NULL::uuid,

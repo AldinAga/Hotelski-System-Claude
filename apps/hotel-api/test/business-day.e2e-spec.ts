@@ -131,6 +131,8 @@ describe('business day (e2e)', () => {
       lagDays: 0,
       lastClosed: { day: '2026-11-01', closedAt: '2026-11-02T02:00:00.000Z', mode: 'auto' },
       lastAutoError: { at: '2026-11-02T02:00:00.000Z', code: 'folio_failed', details: { stays: 2 } },
+      blockers: [],
+      pending: { arrivals: 0, departures: 0, inHouse: 0, nightsToPost: 0, noShows: 0 },
     });
   });
 

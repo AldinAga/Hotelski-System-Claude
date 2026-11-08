@@ -10,6 +10,7 @@ import { configureHttp, HTTP_OPTIONS } from './http';
 import { PG_POOL } from './db/tokens';
 import { migrate } from './db/migrate';
 import { LicenceService } from './licensing/licence.service';
+import { NightAuditScheduler } from './business-day/night-audit.scheduler';
 
 const port = Number(process.env.HOTEL_API_PORT ?? 4200);
 
@@ -29,6 +30,8 @@ async function bootstrap(): Promise<void> {
     await app.get(SetupService).prepareOnBoot();
     // After migrations: loads the licence and starts heartbeat and key refresh.
     await app.get(LicenceService).start();
+    // After the licence: the automatic night audit checks it at every tick. Stopped on shutdown (OnModuleDestroy).
+    app.get(NightAuditScheduler).start();
     await app.listen(port);
   } catch (err) {
     // Stop timers and pools of the half-started app; the port stays free for

@@ -98,6 +98,13 @@ export const MESSAGES: Record<string, string> = {
   stay_not_found: 'Boravak ne postoji. Osvežite stranicu.',
   stay_not_assignable: 'Boravku se ne može dodeliti jedinica u ovom stanju.',
   version_conflict: 'Rezervaciju je u međuvremenu neko izmenio. Osvežite prikaz i pokušajte ponovo.',
+
+  // business day and night audit
+  business_day_mismatch: 'Otvoren je drugi poslovni dan ({open}). Osvežite prikaz.',
+  business_day_in_future: 'Poslovni dan {day} još nije počeo (danas je {today}) i ne može da se zatvori.',
+  close_blocked: 'Gosti koji odlaze još nisu odjavljeni. Odjavite ih, pa zatvorite dan.',
+  close_failed: 'Noćenje nije moglo da se proknjiži, pa je dan ostao otvoren. Obratite se podršci.',
+  business_day_not_found: 'Poslovni dan nije zatvoren ili ne postoji.',
 };
 
 /** Field names in validation_failed details, as the forms label them. */

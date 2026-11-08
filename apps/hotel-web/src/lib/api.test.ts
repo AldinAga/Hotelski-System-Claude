@@ -118,6 +118,8 @@ describe('messageFor', () => {
       'rates/rates.service.ts',
       'rates/quote.ts',
       'common/input.ts',
+      // The night audit: the close dialog and the closed-day screens (Task 12).
+      'business-day/night-audit.service.ts',
     ]) {
       const text = readFileSync(resolve(api, file), 'utf8');
       for (const m of text.matchAll(/DomainError\(\s*'([a-z_]+)'/g)) codes.add(m[1]);
