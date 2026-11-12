@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { CurrentUser, Roles } from '../auth/auth.guard';
 import type { AuthUser } from '../auth/sessions.service';
 import { LicensedAction } from '../licensing/licensed-action';
+import { DocumentsService, type DocumentListItem, type DocumentView } from './documents.service';
 import { FolioService, type FolioView, type Written } from './folio.service';
 
 // The folio routes, all hotel.folio. The front desk (receptionist, manager,
@@ -22,7 +23,10 @@ function send<T>(res: Response, written: Written<T>): void {
 @Controller()
 @Roles('owner', 'manager', 'receptionist')
 export class FolioController {
-  constructor(private readonly folio: FolioService) {}
+  constructor(
+    private readonly folio: FolioService,
+    private readonly documents: DocumentsService,
+  ) {}
 
   @Get('stays/:id/folio')
   @LicensedAction('hotel.folio', 'folio.view')
@@ -61,5 +65,24 @@ export class FolioController {
   @LicensedAction('hotel.folio', 'folio.correct')
   async voidPayment(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Body() body: unknown, @Res() res: Response) {
     send(res, await this.folio.voidPayment(id, body, actor));
+  }
+
+  // Non-fiscal receipts and pro formas (Task 8); issuing works in safe mode (folio.document).
+  @Post('stays/:id/folio/documents')
+  @LicensedAction('hotel.folio', 'folio.document')
+  async issueDocument(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, await this.documents.issue(id, body, actor));
+  }
+
+  @Get('stays/:id/folio/documents')
+  @LicensedAction('hotel.folio', 'folio.view')
+  documentsOf(@Param('id') id: string): Promise<DocumentListItem[]> {
+    return this.documents.list(id);
+  }
+
+  @Get('folio-documents/:id')
+  @LicensedAction('hotel.folio', 'folio.view')
+  document(@Param('id') id: string): Promise<DocumentView> {
+    return this.documents.get(id);
   }
 }

@@ -162,4 +162,42 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
       client.release();
     }
   });
+
+  it('0012: empty document tables; a document of a 1a stay is append-only and its number and key are unique', async () => {
+    for (const table of ['document_counter', 'folio_document']) {
+      const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
+      expect({ table, n: rows[0].n }).toEqual({ table, n: 0 });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: folios } = await client.query<{ id: string }>(
+        `INSERT INTO folio (property_id, stay_id, reservation_id)
+         SELECT property_id, id, reservation_id FROM stay WHERE id = $1 RETURNING id`,
+        [seed.futureStayId],
+      );
+      const insert = (number: string, key: string) =>
+        client.query<{ id: string }>(
+          `INSERT INTO folio_document (property_id, folio_id, kind, number, business_date, content, idempotency_key, request_hash)
+           VALUES ($1, $2, 'receipt', $3, '2026-11-02', '{}', $4, 'h') RETURNING id`,
+          [seed.propertyId, folios[0].id, number, key],
+        );
+      await insert('N-2026-000001', 'upgrade-doc-1');
+      await client.query('SAVEPOINT s');
+      await expect(insert('N-2026-000001', 'upgrade-doc-2')).rejects.toMatchObject({ constraint: 'folio_document_property_id_number_key' });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(insert('N-2026-000002', 'upgrade-doc-1')).rejects.toMatchObject({ constraint: 'folio_document_key' });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(client.query(`UPDATE folio_document SET number = 'x'`)).rejects.toThrow(/append_only/);
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(client.query(`DELETE FROM folio_document`)).rejects.toThrow(/append_only/);
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(
+        client.query(`INSERT INTO document_counter (property_id, kind, year, last) VALUES ($1, 'invoice', 2026, 0)`, [seed.propertyId]),
+      ).rejects.toThrow(/document_counter_kind_check/);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
 });

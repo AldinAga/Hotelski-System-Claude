@@ -5,10 +5,11 @@ import { BusinessDayService } from '../business-day/business-day.service';
 import { SettingsService } from '../business-day/settings.service';
 import { AuditService } from '../common/audit.service';
 import { DomainError } from '../common/domain-error';
-import { parseKey, requestHash } from '../common/idempotency';
+import { findKey, parseKey, requestHash, type KeySource } from '../common/idempotency';
 import { asBody, isUniqueViolation, isUuid, optionalText, requireOneOf, requireText, validationFailed, type Body } from '../common/input';
 import { PropertyContext } from '../common/property-context';
 import { DB, type Db, type Tx } from '../db/tokens';
+import { LegalProfileService } from '../legal/legal-profile.service';
 import type { Actor } from '../reservations/reservations.service';
 
 // The folio of a stay (spec 5.5): its lines (charges, nights, corrections)
@@ -26,9 +27,9 @@ import type { Actor } from '../reservations/reservations.service';
 // first result before any rule could refuse it), then folio_closed, then the
 // rules of the operation, then the insert.
 //
-// Request keys are unique per property in folio_line and in payment
-// separately, so a key is looked up in both (Task 8 adds folio_document to
-// findKey). Two requests with one key on the same folio meet at the folio
+// Request keys are unique per property in folio_line, payment and
+// folio_document separately, so a key is looked up in all three (findKey in
+// common/idempotency.ts, shared with DocumentsService). Two requests with one key on the same folio meet at the folio
 // lock and the second finds the first; on two folios the second insert hits
 // the unique index, which write() turns into 409 idempotency_key_reused.
 
@@ -81,6 +82,8 @@ export interface FolioView {
   unpostedNights: Array<{ night: string; priceMinor: number }>;
   /** The VAT rates a manual charge may carry (property settings; preflight F38). */
   vatRatesBp: number[];
+  /** Shown while fiscalisation is required but not switched on (Ruling 4, preflight F8): the legal profile's notice. */
+  fiscalNotice: 'not_available_yet' | null;
 }
 
 /** A write's answer: `created` false when the request key replayed an earlier result (200, not 201). */
@@ -125,13 +128,13 @@ export const MAX_AMOUNT_MINOR = 10_000_000_000;
 const CURRENCY = 'RSD';
 const CHARGE_KINDS = ['service', 'fee'] as const;
 const PAY_METHODS = ['cash', 'card', 'transfer'] as const;
-const CHARGEABLE: ReadonlySet<string> = new Set(['expected', 'in_house']);
+export const CHARGEABLE: ReadonlySet<string> = new Set(['expected', 'in_house']);
 
 const stayNotFound = () => new DomainError('stay_not_found', 'Boravak ne postoji.', 404);
 const lineNotFound = () => new DomainError('line_not_found', 'Stavka folija ne postoji.', 404);
 const paymentNotFound = () => new DomainError('payment_not_found', 'Plaćanje ne postoji.', 404);
 const folioClosed = () => new DomainError('folio_closed', 'Folio je zatvoren i ne prima nove stavke ni plaćanja.', 409);
-const keyReused = () =>
+export const keyReused = () =>
   new DomainError('idempotency_key_reused', 'Ključ zahteva je već upotrebljen za drugi zahtev.', 409);
 
 /** An integer 1 ≤ n ≤ 10_000_000_000; otherwise 422 naming amountMinor. */
@@ -141,19 +144,19 @@ function amountOf(b: Body): number {
   return v;
 }
 
-function minorFrom(raw: string): number {
+export function minorFrom(raw: string): number {
   const n = Number(raw);
   if (!Number.isSafeInteger(n)) throw new Error(`folio: amount ${raw} is not a safe integer`);
   return n;
 }
 
 /** 'Smeštaj 2.11.2026' for night 2026-11-02. */
-function nightDescription(night: string): string {
+export function nightDescription(night: string): string {
   const [y, m, d] = night.split('-').map(Number);
   return `Smeštaj ${d}.${m}.${y}`;
 }
 
-function constraintOf(err: unknown): string | undefined {
+export function constraintOf(err: unknown): string | undefined {
   const e = err as { constraint?: string; cause?: { constraint?: string } } | null;
   return e?.constraint ?? e?.cause?.constraint;
 }
@@ -227,6 +230,7 @@ export class FolioService {
     private readonly property: PropertyContext,
     private readonly days: BusinessDayService,
     private readonly settings: SettingsService,
+    private readonly legal: LegalProfileService,
   ) {}
 
   // ---- building blocks for check-in/out and the night audit (Tasks 5-6) ----
@@ -327,7 +331,8 @@ export class FolioService {
         const folio = folios[0];
         const { vatRatesBp } = await this.settings.read(tx, propertyId);
         const unpostedNights = CHARGEABLE.has(stay.status) ? await this.unpostedNights(tx, propertyId, stayId) : [];
-        const base = { stayId, reservationId: stay.reservation_id, unpostedNights, vatRatesBp };
+        const { fiscalNotice } = await this.legal.get();
+        const base = { stayId, reservationId: stay.reservation_id, unpostedNights, vatRatesBp, fiscalNotice };
         if (!folio) {
           return { ...base, id: null, status: 'none', lines: [], payments: [], chargesMinor: 0, paymentsMinor: 0, balanceMinor: 0 };
         }
@@ -614,28 +619,13 @@ export class FolioService {
     }
   }
 
-  /** Where a request key was used: one lookup across the tables that hold keys. */
-  private async findKey(
-    tx: Tx,
-    propertyId: string,
-    key: string,
-  ): Promise<{ source: 'folio_line' | 'payment'; id: string; request_hash: string } | null> {
-    const { rows } = await tx.execute<{ source: 'folio_line' | 'payment'; id: string; request_hash: string }>(sql`
-      SELECT 'folio_line' AS source, id, request_hash FROM folio_line
-       WHERE property_id = ${propertyId} AND idempotency_key = ${key}
-      UNION ALL
-      SELECT 'payment' AS source, id, request_hash FROM payment
-       WHERE property_id = ${propertyId} AND idempotency_key = ${key}`);
-    return rows[0] ?? null;
-  }
-
   /**
    * The id of the earlier result of this request (same key, same table, same
    * hash), null for a new key; 409 idempotency_key_reused when the key was
    * used for anything else.
    */
-  private async replay(tx: Tx, propertyId: string, key: string, source: 'folio_line' | 'payment', hash: string): Promise<string | null> {
-    const found = await this.findKey(tx, propertyId, key);
+  private async replay(tx: Tx, propertyId: string, key: string, source: KeySource, hash: string): Promise<string | null> {
+    const found = await findKey(tx, propertyId, key);
     if (!found) return null;
     if (found.source !== source || found.request_hash !== hash) throw keyReused();
     return found.id;
@@ -680,6 +670,16 @@ export class FolioService {
               ${p.reversesPaymentId}::uuid, ${p.reason}, ${p.key}, ${p.hash}, ${p.actor.id})
       RETURNING id`);
     return rows[0].id;
+  }
+
+  /** The lines of a folio, in folio order (Ruling 30). */
+  folioLines(tx: Tx, propertyId: string, folioId: string): Promise<LineView[]> {
+    return this.lines(tx, propertyId, sql`l.folio_id = ${folioId}`);
+  }
+
+  /** The payments of a folio, in the order taken. */
+  folioPayments(tx: Tx, propertyId: string, folioId: string): Promise<PaymentView[]> {
+    return this.payments(tx, propertyId, sql`p.folio_id = ${folioId}`);
   }
 
   private async lines(tx: Tx, propertyId: string, where: SQL): Promise<LineView[]> {

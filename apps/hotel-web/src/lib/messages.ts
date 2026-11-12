@@ -106,6 +106,10 @@ export const MESSAGES: Record<string, string> = {
   close_blocked: 'Gosti koji odlaze još nisu odjavljeni. Odjavite ih, pa zatvorite dan.',
   close_failed: 'Noćenje nije moglo da se proknjiži, pa je dan ostao otvoren. Obratite se podršci.',
   business_day_not_found: 'Poslovni dan nije zatvoren ili ne postoji.',
+
+  // folio documents (non-fiscal receipt, pro forma)
+  document_empty: 'Folio nema nijednu stavku ni plaćanje, pa dokument ne može da se izda.',
+  document_not_found: 'Dokument ne postoji. Osvežite stranicu.',
 };
 
 /** Field names in validation_failed details, as the forms label them. */

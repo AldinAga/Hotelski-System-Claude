@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { sql } from 'drizzle-orm';
+import type { Tx } from '../db/tokens';
 import { validationFailed, type Body } from './input';
 
 // Request keys of the money routes (folio charges, corrections, payments,
@@ -37,4 +39,29 @@ function canonical(value: unknown): string {
  */
 export function requestHash(route: string, subject: string, fields: Record<string, unknown>): string {
   return createHash('sha256').update(canonical({ route, subject, fields })).digest('hex');
+}
+
+/** The tables that hold request keys, each unique per property. */
+export type KeySource = 'folio_line' | 'payment' | 'folio_document';
+
+/**
+ * Where a request key of the property was used: one lookup across every table
+ * that holds keys (preflight F6), so a key is never replayed into another kind
+ * of write. null when the key is new.
+ */
+export async function findKey(
+  tx: Tx,
+  propertyId: string,
+  key: string,
+): Promise<{ source: KeySource; id: string; request_hash: string } | null> {
+  const { rows } = await tx.execute<{ source: KeySource; id: string; request_hash: string }>(sql`
+    SELECT 'folio_line' AS source, id, request_hash FROM folio_line
+     WHERE property_id = ${propertyId} AND idempotency_key = ${key}
+    UNION ALL
+    SELECT 'payment' AS source, id, request_hash FROM payment
+     WHERE property_id = ${propertyId} AND idempotency_key = ${key}
+    UNION ALL
+    SELECT 'folio_document' AS source, id, request_hash FROM folio_document
+     WHERE property_id = ${propertyId} AND idempotency_key = ${key}`);
+  return rows[0] ?? null;
 }
