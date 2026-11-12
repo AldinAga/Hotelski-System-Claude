@@ -40,3 +40,13 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    # The GitHub Actions runner (github-runner-claude) sits on claude-gh-runner_default
+    # and reaches the database by this name; the project's own network stays for ci.sh.
+    networks:
+      - default
+      - gh-runner
+
+networks:
+  gh-runner:
+    name: claude-gh-runner_default
+    external: true
