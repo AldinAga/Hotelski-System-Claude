@@ -572,7 +572,8 @@ describe('night audit (e2e)', () => {
     const long = await fd.get('/business-days?from=2026-11-01&to=2027-01-03'); // 63 days
     expect(long.status).toBe(422);
     expect(long.body).toMatchObject({ code: 'range_too_long', details: { max: 62 } });
-    for (const day of ['2026-11-02', '2026-10-01', 'yesterday']) {
+    // 'yesterday' is a date literal Postgres accepts; the other two are not and would be a 500 without the mapping.
+    for (const day of ['2026-11-02', '2026-10-01', 'yesterday', '2026-13-01', 'not-a-date']) {
       const res = await fd.get(`/business-days/${day}`);
       expect({ day, status: res.status, code: res.body.code }).toEqual({ day, status: 404, code: 'business_day_not_found' });
     }
