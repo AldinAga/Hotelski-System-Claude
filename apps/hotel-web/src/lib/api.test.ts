@@ -120,6 +120,9 @@ describe('messageFor', () => {
       'common/input.ts',
       // The night audit: the close dialog and the closed-day screens (Task 12).
       'business-day/night-audit.service.ts',
+      // Check-in, check-out and the guests of a stay (Task 10).
+      'stays/stay-lifecycle.service.ts',
+      'guests/guests.service.ts',
     ]) {
       const text = readFileSync(resolve(api, file), 'utf8');
       for (const m of text.matchAll(/DomainError\(\s*'([a-z_]+)'/g)) codes.add(m[1]);
@@ -134,6 +137,27 @@ describe('messageFor', () => {
   it('a stay field in validation_failed is named as the form names it', () => {
     expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'stays[0].adults' }))).toBe('Proverite polje „Odrasli“.');
     expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'holder.firstName' }))).toBe('Proverite polje „Ime“.');
+  });
+
+  it('check_in_wrong_day names both days; once the arrival is behind the open day it does not tell to close it', () => {
+    const ahead = new ApiError(409, 'check_in_wrong_day', 'x', { arrival: '2026-11-13', businessDate: '2026-11-12' });
+    expect(messageFor(ahead)).toBe(
+      'Dolazak je 13.11.2026, a poslovni dan je 12.11.2026. Zatvorite poslovni dan pre prijave gosta.',
+    );
+    const behind = new ApiError(409, 'check_in_wrong_day', 'x', { arrival: '2026-11-11', businessDate: '2026-11-12' });
+    expect(messageFor(behind)).toBe(
+      'Dolazak je bio 11.11.2026, a poslovni dan je 12.11.2026. Prijava na dan dolaska više nije moguća.',
+    );
+  });
+
+  it('folio_balance_open shows the amount in dinars', () => {
+    expect(messageFor(new ApiError(409, 'folio_balance_open', 'x', { balanceMinor: 500000 }))).toBe(
+      'Saldo folija nije nula (5.000,00 RSD). Naplatite ili vratite razliku pre odjave.',
+    );
+  });
+
+  it('the dictionary has no Cyrillic letters', () => {
+    expect(Object.values(MESSAGES).filter((t) => /[\u0400-\u04FF]/.test(t))).toEqual([]);
   });
 
   it('no_availability names the night as D.M.YYYY', () => {

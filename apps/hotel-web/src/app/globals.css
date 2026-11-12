@@ -1002,3 +1002,62 @@ html:has(.portal) body {
     outline: 3px solid Highlight;
   }
 }
+
+/* ------------------------------------------------------------------------
+ * Reservation page: check-in, check-out and guests of one stay.
+ * ---------------------------------------------------------------------- */
+.stay-block {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stay-subhead {
+  margin: 4px 0 0;
+  font-size: 1rem;
+}
+
+.stay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.stay-block .badge {
+  margin-left: 8px;
+}
+
+.stay-block .card {
+  margin-bottom: 0;
+}
+
+/* The nested guest lists sit flat inside the stay's own box. */
+.list > li .list.guests > li {
+  border-color: var(--line);
+  background: var(--bg);
+}
+
+.stay-block button:focus-visible,
+.stay-block a:focus-visible,
+.stay-block input:focus-visible,
+.stay-block h4:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A phone: the actions of a stay are full-width buttons, one under the other, and nothing scrolls sideways. */
+@media (max-width: 480px) {
+  .stay-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stay-actions > button {
+    width: 100%;
+  }
+
+  .stay-block .head > span:last-child:has(button) {
+    width: 100%;
+  }
+}

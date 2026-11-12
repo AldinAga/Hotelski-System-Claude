@@ -34,6 +34,7 @@ const RESERVATION = {
       status: 'expected',
       nights: [],
       totalMinor: 6_000_000,
+      guests: [],
     },
   ],
   totalMinor: 6_000_000,
@@ -45,6 +46,8 @@ function routes(state: string, extra: Record<string, unknown> = {}) {
     [`GET /api/reservations/${RES}`]: { body: RESERVATION },
     'GET /api/unit-types': { body: [TYPE] },
     'GET /api/units': { body: [] },
+    'GET /api/business-day': { body: { day: '2026-10-28' } },
+    [`GET /api/reservations/${RES}/messages`]: { body: [] },
     ...extra,
   } as Parameters<typeof mockFetch>[0];
 }
@@ -238,5 +241,51 @@ describe('ReservationDetail', () => {
     render(<ReservationDetail id={RES} />);
     expect(await screen.findByText('28.10.2026 – 3.11.2026')).toBeInTheDocument();
     await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Otkaži rezervaciju' })).toBeDisabled());
+  });
+});
+
+describe('ReservationDetail: check-in, check-out, guests and mail', () => {
+  it('offers Prijavi gosta on the arrival day of the open business day and checks in with the read version', async () => {
+    const calls = mockFetch(
+      routes('VALID', { [`POST /api/stays/s1/check-in`]: { body: { stayId: 's1', status: 'in_house', version: 3 } } }),
+    );
+    const user = userEvent.setup();
+    render(<ReservationDetail id={RES} />);
+    await user.click(await screen.findByRole('button', { name: 'Prijavi gosta' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Gost je prijavljen.');
+    expect(calls.find((c) => c.method === 'POST')).toEqual({ method: 'POST', url: '/api/stays/s1/check-in', body: { version: 2 } });
+    // The page was read again.
+    expect(calls.filter((c) => c.url === `/api/reservations/${RES}`)).toHaveLength(2);
+  });
+
+  it('without an open business day check-in is not offered', async () => {
+    mockFetch(routes('VALID', { 'GET /api/business-day': apiError(500, 'unknown') }));
+    render(<ReservationDetail id={RES} />);
+    expect(await screen.findByText('28.10.2026 – 3.11.2026')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
+  });
+
+  it('shows the guests of the stay, the mail history and a focusable heading', async () => {
+    const withGuest = {
+      ...RESERVATION,
+      stays: [
+        {
+          ...RESERVATION.stays[0],
+          guests: [{ id: 'g1', firstName: 'Ana', lastName: 'Anić', email: null, phone: null, language: 'sr', note: null, isPrimary: true }],
+        },
+      ],
+    };
+    mockFetch(
+      routes('VALID', {
+        [`GET /api/reservations/${RES}`]: { body: withGuest },
+        [`GET /api/reservations/${RES}/messages`]: {
+          body: [{ id: 'm1', template: 'reservation_confirmed', recipient: 'a@example.com', status: 'sent', attempts: 1, lastError: null, nextAttemptAt: null, sentAt: null, history: [] }],
+        },
+      }),
+    );
+    render(<ReservationDetail id={RES} />);
+    expect(await screen.findByRole('listitem', { name: 'Ana Anić' })).toHaveTextContent('Nosilac');
+    expect(await screen.findByText('Poslato')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAttribute('tabindex', '-1');
   });
 });
