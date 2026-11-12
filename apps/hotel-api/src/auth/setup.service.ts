@@ -152,10 +152,12 @@ export class SetupService {
       const propertyId = existing
         ? (await tx.update(property).set({ name: propertyName }).returning({ id: property.id }))[0].id
         : (await tx.insert(property).values({ name: propertyName }).returning({ id: property.id }))[0].id;
+      // Fiscalisation is required of companies and entrepreneurs, not of a natural person (0011).
+      const fiscalMode = legalKind === 'natural_person' ? ('disabled' as const) : ('required' as const);
       await tx
         .insert(legalProfile)
-        .values({ propertyId, kind: legalKind })
-        .onConflictDoUpdate({ target: legalProfile.propertyId, set: { kind: legalKind } });
+        .values({ propertyId, kind: legalKind, fiscalMode })
+        .onConflictDoUpdate({ target: legalProfile.propertyId, set: { kind: legalKind, fiscalMode } });
 
       const fields = { email, name, passwordHash, totpSecret: secret, totpState: 'setup' as const, totpLastStep: null };
       const previous = await this.setupOwner(tx);

@@ -35,6 +35,19 @@ export const legalProfile = pgTable('legal_profile', {
   taxId: text('tax_id'),
   registryId: text('registry_id'),
   vatPayer: boolean('vat_payer').notNull().default(false),
+  // Migration 0011: the full legal profile; everything is optional until filled in.
+  legalName: text('legal_name'),
+  address: text('address'),
+  postalCode: text('postal_code'),
+  city: text('city'),
+  activityCode: text('activity_code'),
+  bankAccount: text('bank_account'),
+  email: text('email'),
+  phone: text('phone'),
+  accommodationCategory: text('accommodation_category'),
+  categorizationNumber: text('categorization_number'),
+  fiscalMode: text('fiscal_mode', { enum: ['required', 'invoice_only', 'disabled'] }).notNull().default('disabled'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // One row at most (the singleton key is always true).
