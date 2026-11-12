@@ -1,0 +1,75 @@
+# CI for the hotel system, run on the owner's NAS self-hosted runner
+# (labels: self-hosted, nas). GitHub-hosted runners cannot reach the LAN-only
+# Verdaccio registry (http://192.168.1.199:4873) that serves @platform/*.
+#
+# The runner container mounts the registry .npmrc as ~/.npmrc, so `pnpm install`
+# needs no token here and none must ever be written into this repo.
+#
+# The steps equal infrastructure/nas/ci.sh: install, build, migrations check,
+# test, typecheck.
+#
+# Database: no service containers (the runner has no Docker socket, and every
+# throwaway container e-mails the owner when it stops). The job uses the hotel's
+# own long-running hotel-postgres-test-claude (tmpfs data, infrastructure/nas/
+# ci-compose.yml), which is attached to the runner's network claude-gh-runner_default
+# so the name resolves. The specs create their own databases there (hotel_test_N,
+# hotel_migrate_N, ...) with fixed names, so a NAS ci.sh run and this workflow must
+# not run at the same time.
+#
+# Security: the repository is public and the runner is self-hosted. Never use
+# pull_request_target here. Runs from fork pull requests need owner approval
+# (repository setting "Require approval for all outside collaborators", already on);
+# keep it on, because a fork PR executes its code on the NAS.
+name: CI
+
+on:
+  push:
+    branches: [master, 'phase-**']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 20
+  PNPM_VERSION: 9.6.0
+
+jobs:
+  test:
+    name: Build, tests and typecheck
+    runs-on: [self-hosted, nas]
+    timeout-minutes: 30
+    env:
+      # Throwaway test database (tmpfs); this password is not a secret.
+      DATABASE_URL: postgres://postgres:postgres@hotel-postgres-test-claude:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Build
+        run: pnpm build
+
+      - name: Check migrations are built
+        run: test -f apps/hotel-api/dist/db/migrations/0001_foundation.sql
+
+      - name: Test
+        run: pnpm test
+
+      - name: Typecheck
+        run: pnpm typecheck
