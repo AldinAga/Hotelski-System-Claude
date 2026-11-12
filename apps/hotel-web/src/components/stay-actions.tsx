@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError, api, send } from '@/lib/api';
 import { formatDay, formatRsd } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
+import type { LicenceMode } from '@/lib/use-read-only';
 import type { CheckOutPreview, Reservation, ReservationStay } from '@/lib/types';
 
 interface Props {
@@ -11,8 +12,8 @@ interface Props {
   reservation: Reservation;
   /** The open business day (YYYY-MM-DD), or null while it is not known. */
   businessDate: string | null;
-  /** Safe mode or no usable licence: check-out still works, nothing new moves in. */
-  readOnly: boolean;
+  /** Check-out works in safe mode (EXPIRED), nothing at all without a usable licence, check-in only with a full one. */
+  licence: LicenceMode;
   /** Called after the action (with the text to show) or after a refusal that means the page is out of date. */
   onChanged: (notice?: string) => void | Promise<void>;
 }
@@ -28,7 +29,7 @@ function dayMonth(day: string): string {
  * arrival day of the open business day; check-out opens a preview of what it
  * will post and release, and confirms only with a zero balance.
  */
-export function StayActions({ stay, reservation, businessDate, readOnly, onChanged }: Props) {
+export function StayActions({ stay, reservation, businessDate, licence, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<CheckOutPreview | null>(null);
@@ -120,13 +121,13 @@ export function StayActions({ stay, reservation, businessDate, readOnly, onChang
       {!preview && (canCheckIn || arrivesLater || inHouse) && (
         <div className="stay-actions">
           {canCheckIn && (
-            <button type="button" disabled={busy || readOnly} onClick={() => void checkIn()}>
+            <button type="button" disabled={busy || licence !== 'full'} onClick={() => void checkIn()}>
               Prijavi gosta
             </button>
           )}
           {arrivesLater && <span className="muted">{`Dolazak ${dayMonth(stay.arrival)}`}</span>}
           {inHouse && (
-            <button type="button" ref={checkOutRef} disabled={busy} onClick={() => void openPreview()}>
+            <button type="button" ref={checkOutRef} disabled={busy || licence === 'none'} onClick={() => void openPreview()}>
               Odjavi gosta
             </button>
           )}
@@ -173,7 +174,7 @@ export function StayActions({ stay, reservation, businessDate, readOnly, onChang
           )}
           <div className="stay-actions">
             {preview.balanceMinor === 0 && (
-              <button type="button" disabled={busy} onClick={() => void checkOut()}>
+              <button type="button" disabled={busy || licence === 'none'} onClick={() => void checkOut()}>
                 Potvrdi odjavu
               </button>
             )}

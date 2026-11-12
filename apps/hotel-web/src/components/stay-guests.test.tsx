@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { apiError, mockFetch } from '@/test/fetch-mock';
@@ -131,6 +131,18 @@ describe('StayGuests', () => {
     ]);
   });
 
+  it('leaves out an e-mail and a phone that were not filled in', async () => {
+    const calls = mockFetch({ 'POST /api/stays/s1/guests': { body: [ANA, BOJAN, CEDA] } });
+    const user = userEvent.setup();
+    render(<StayGuests stay={STAY} readOnly={false} />);
+    await user.click(screen.getByRole('button', { name: 'Dodaj gosta' }));
+    await user.type(screen.getByLabelText('Ime'), 'Čedomir');
+    await user.type(screen.getByLabelText('Prezime'), 'Čolić');
+    await user.click(screen.getByRole('button', { name: 'Dodaj novog gosta' }));
+    await screen.findByRole('listitem', { name: 'Čedomir Čolić' });
+    expect(calls[0].body).toEqual({ guest: { firstName: 'Čedomir', lastName: 'Čolić' } });
+  });
+
   it('removes a guest who is not the primary one', async () => {
     const calls = mockFetch({ 'DELETE /api/stays/s1/guests/g2': { body: [ANA] } });
     const user = userEvent.setup();
@@ -181,6 +193,26 @@ describe('StayGuests', () => {
     const user = userEvent.setup();
     render(<StayGuests stay={STAY} readOnly={false} />);
     await user.dblClick(screen.getByRole('button', { name: 'Ukloni gosta Bojan Bošković' }));
+    release();
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Bojan Bošković' })).toBeNull());
+    expect(calls).toHaveLength(1);
+  });
+
+it('two clicks on Ukloni in the same tick (before the button is disabled) still send one request', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls = mockFetch({
+      'DELETE /api/stays/s1/guests/g2': async () => {
+        await gate;
+        return { body: [ANA] };
+      },
+    });
+    render(<StayGuests stay={STAY} readOnly={false} />);
+    const remove = screen.getByRole('button', { name: 'Ukloni gosta Bojan Bošković' });
+    act(() => {
+      remove.click();
+      remove.click();
+    });
     release();
     await waitFor(() => expect(screen.queryByRole('listitem', { name: 'Bojan Bošković' })).toBeNull());
     expect(calls).toHaveLength(1);

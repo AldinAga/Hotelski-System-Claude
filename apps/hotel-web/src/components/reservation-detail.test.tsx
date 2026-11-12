@@ -289,3 +289,36 @@ describe('ReservationDetail: check-in, check-out, guests and mail', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveAttribute('tabindex', '-1');
   });
 });
+
+describe('ReservationDetail: licence modes on the stay actions', () => {
+  const live = (status: string) => ({
+    [`GET /api/reservations/${RES}`]: { body: { ...RESERVATION, stays: [{ ...RESERVATION.stays[0], status }] } },
+  });
+
+  it('EXPIRED (safe mode): Odjavi gosta works, Dodaj gosta does not', async () => {
+    mockFetch(routes('EXPIRED', live('in_house')));
+    render(<ReservationDetail id={RES} />);
+    // The licence answers after the page: wait for a control that follows it.
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Dodaj gosta' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Odjavi gosta' })).toBeEnabled();
+  });
+
+  it('EXPIRED (safe mode): Prijavi gosta is disabled', async () => {
+    mockFetch(routes('EXPIRED'));
+    render(<ReservationDetail id={RES} />);
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeDisabled());
+  });
+
+  it.each(['INVALID', 'NOT_ACTIVATED'])('%s: Odjavi gosta is disabled too', async (state) => {
+    mockFetch(routes(state, live('in_house')));
+    render(<ReservationDetail id={RES} />);
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Odjavi gosta' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Dodaj gosta' })).toBeDisabled();
+  });
+
+  it('a valid licence leaves Prijavi gosta enabled', async () => {
+    mockFetch(routes('VALID'));
+    render(<ReservationDetail id={RES} />);
+    expect(await screen.findByRole('button', { name: 'Prijavi gosta' })).toBeEnabled();
+  });
+});

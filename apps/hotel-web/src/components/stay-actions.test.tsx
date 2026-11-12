@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiError, mockFetch } from '@/test/fetch-mock';
 import type { CheckOutPreview, Reservation, ReservationStay } from '@/lib/types';
+import type { LicenceMode } from '@/lib/use-read-only';
 import { StayActions } from './stay-actions';
 
 const DAY = '2026-11-12';
@@ -33,18 +34,19 @@ const PREVIEW: CheckOutPreview = {
   balanceMinor: 0,
 };
 
-function setup(over: { stay?: Partial<ReservationStay>; businessDate?: string | null; readOnly?: boolean } = {}) {
+function setup(over: { stay?: Partial<ReservationStay>; businessDate?: string | null; licence?: LicenceMode } = {}) {
   const onChanged = vi.fn();
-  const view = render(
+  const ui = (licence: LicenceMode) => (
     <StayActions
       stay={{ ...STAY, ...over.stay }}
       reservation={RESERVATION}
       businessDate={over.businessDate === undefined ? DAY : over.businessDate}
-      readOnly={over.readOnly ?? false}
+      licence={licence}
       onChanged={onChanged}
-    />,
+    />
   );
-  return { onChanged, ...view };
+  const view = render(ui(over.licence ?? 'full'));
+  return { onChanged, ...view, setLicence: (licence: LicenceMode) => view.rerender(ui(licence)) };
 }
 
 const inHouse = { status: 'in_house' as const };
@@ -139,7 +141,12 @@ describe('StayActions: check-in', () => {
   });
 
   it('in safe mode Prijavi gosta is disabled', () => {
-    setup({ readOnly: true });
+    setup({ licence: 'safe' });
+    expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeDisabled();
+  });
+
+  it('without a usable licence (INVALID, NOT_ACTIVATED) Prijavi gosta is disabled', () => {
+    setup({ licence: 'none' });
     expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeDisabled();
   });
 });
@@ -302,7 +309,7 @@ describe('StayActions: check-out', () => {
       'POST /api/stays/s1/check-out': { body: { stayId: 's1', status: 'checked_out', version: 5, departure: '2026-11-15' } },
     });
     const user = userEvent.setup();
-    const out = setup({ stay: inHouse, readOnly: true });
+    const out = setup({ stay: inHouse, licence: 'safe' });
     await open(user);
     expect(screen.getByRole('button', { name: 'Potvrdi odjavu' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Potvrdi odjavu' }));
@@ -310,8 +317,19 @@ describe('StayActions: check-out', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(true);
     out.unmount();
 
-    setup({ readOnly: true });
+    setup({ licence: 'safe' });
     expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeDisabled();
+  });
+
+  it('without a usable licence (INVALID, NOT_ACTIVATED) Odjavi gosta is disabled, and so is a confirmation already open', async () => {
+    mockFetch({ 'GET /api/stays/s1/check-out-preview': { body: PREVIEW } });
+    const user = userEvent.setup();
+    const out = setup({ stay: inHouse, licence: 'none' });
+    expect(screen.getByRole('button', { name: 'Odjavi gosta' })).toBeDisabled();
+    out.setLicence('full');
+    await open(user);
+    out.setLicence('none');
+    expect(screen.getByRole('button', { name: 'Potvrdi odjavu' })).toBeDisabled();
   });
 
   it('offers no check-out for a stay that is not in the house', () => {

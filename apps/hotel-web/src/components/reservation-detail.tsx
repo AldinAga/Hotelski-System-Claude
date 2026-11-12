@@ -12,7 +12,7 @@ import {
   type Unit,
   type UnitType,
 } from '@/lib/types';
-import { useReadOnly } from '@/lib/use-read-only';
+import { useLicenceMode } from '@/lib/use-read-only';
 import { ReservationMessages } from './reservation-messages';
 import { StayActions } from './stay-actions';
 import { StayGuests } from './stay-guests';
@@ -29,7 +29,8 @@ const MOVABLE_RESERVATION = new Set(['requested', 'confirmed']);
 
 /** One reservation with the real stay dates (the calendar shows them clipped to its range). */
 export function ReservationDetail({ id }: { id: string }) {
-  const readOnly = useReadOnly();
+  const licence = useLicenceMode();
+  const readOnly = licence !== 'full';
   const [r, setR] = useState<Reservation | null>(null);
   const [businessDate, setBusinessDate] = useState<string | null>(null);
   const [names, setNames] = useState<{ types: Map<string, UnitType>; units: Map<string, Unit> }>({
@@ -171,7 +172,7 @@ export function ReservationDetail({ id }: { id: string }) {
                     stay={s}
                     reservation={r}
                     businessDate={businessDate}
-                    readOnly={readOnly}
+                    licence={licence}
                     onChanged={changed}
                   />
                   <StayGuests stay={s} readOnly={readOnly} />

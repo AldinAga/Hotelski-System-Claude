@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiError, mockFetch } from '@/test/fetch-mock';
@@ -79,6 +79,27 @@ describe('ReservationMessages', () => {
     const user = userEvent.setup();
     render(<ReservationMessages reservationId="r1" />);
     await user.dblClick(await screen.findByRole('button', { name: 'Pošalji ponovo' }));
+    release();
+    await waitFor(() => expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2));
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+  });
+
+  it('two clicks in the same tick (before the button is disabled) still send one resend', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls = mockFetch({
+      [LIST]: { body: [message({ status: 'failed', lastError: 'x' })] },
+      'POST /api/messages/m1/resend': async () => {
+        await gate;
+        return { body: { id: 'm1', status: 'pending' } };
+      },
+    });
+    render(<ReservationMessages reservationId="r1" />);
+    const resend = await screen.findByRole('button', { name: 'Pošalji ponovo' });
+    act(() => {
+      resend.click();
+      resend.click();
+    });
     release();
     await waitFor(() => expect(calls.filter((c) => c.method === 'GET')).toHaveLength(2));
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
