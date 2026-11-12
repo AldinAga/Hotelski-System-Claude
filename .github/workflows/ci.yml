@@ -13,8 +13,9 @@
 # own long-running hotel-postgres-test-claude (tmpfs data, infrastructure/nas/
 # ci-compose.yml), which is attached to the runner's network claude-gh-runner_default
 # so the name resolves. The specs create their own databases there (hotel_test_N,
-# hotel_migrate_N, ...) with fixed names, so a NAS ci.sh run and this workflow must
-# not run at the same time.
+# hotel_migrate_N, ...); HOTEL_TEST_DB_PREFIX (set below from the run id) keeps every
+# run's databases apart from other runs and from NAS ci.sh runs (no prefix), and the
+# last step drops them.
 #
 # Security: the repository is public and the runner is self-hosted. Never use
 # pull_request_target here. Runs from fork pull requests need owner approval
@@ -48,7 +49,18 @@ jobs:
     env:
       # Throwaway test database (tmpfs); this password is not a secret.
       DATABASE_URL: postgres://postgres:postgres@hotel-postgres-test-claude:5432/postgres
+      # Every database the specs create gets this prefix (apps/hotel-api/test/db.ts),
+      # so this run cannot collide with another run or with a NAS ci.sh run.
+      HOTEL_TEST_DB_PREFIX: gh${{ github.run_id }}_${{ github.run_attempt }}_
     steps:
+      # A runner detached from the database network (another branch's ci.sh runs
+      # `compose up` with an older ci-compose.yml) would otherwise hang in the tests
+      # until the job timeout.
+      - name: Test database reachable
+        run: |
+          getent hosts hotel-postgres-test-claude
+          PGCONNECT_TIMEOUT=10 psql "$DATABASE_URL" -At -c 'select 1'
+
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
@@ -73,3 +85,9 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Drop this run's test databases
+        if: always()
+        run: |
+          psql "$DATABASE_URL" -At -c "select datname from pg_database where starts_with(datname, '${HOTEL_TEST_DB_PREFIX}')" \
+            | while read -r d; do psql "$DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$d\" WITH (FORCE)"; done
