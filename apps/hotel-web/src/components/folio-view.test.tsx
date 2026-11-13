@@ -125,9 +125,24 @@ async function settled() {
   });
 }
 
+/**
+ * A user whose clicks leave the screen time to settle. Opening a money dialog reads the folio first, so the dialog
+ * is there a moment after the click; without the wait a test would look for it too early.
+ */
+function setupUser() {
+  const user = userEvent.setup();
+  const click = user.click.bind(user);
+  const patched: { click: typeof user.click } = user;
+  patched.click = async (element) => {
+    await click(element);
+    await settled();
+  };
+  return user;
+}
+
 async function open(o: Opts = {}) {
   const calls = mockFetch(routes(o));
-  const user = userEvent.setup();
+  const user = setupUser();
   render(<FolioView stayId={STAY} />);
   await screen.findByText('Ukupno');
   await settled();
@@ -323,7 +338,7 @@ describe('FolioView: Naplati', () => {
     await user.click(within(dialog('Naplata')).getByRole('button', { name: 'Naplati' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByRole('status')).toHaveTextContent('Naplata je zabeležena.');
-    expect(folioReads(calls)).toBe(2);
+    expect(folioReads(calls)).toBe(3);
   });
 
   it('an amount that is not an amount, or is zero, is refused without a request', async () => {
@@ -376,7 +391,7 @@ describe('FolioView: Naplati', () => {
         },
       }),
     );
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<FolioView stayId={STAY} />);
     await screen.findByText('Ukupno');
     await user.click(screen.getByRole('button', { name: 'Naplati' }));
@@ -406,7 +421,7 @@ describe('FolioView: Naplati', () => {
         },
       }),
     );
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<FolioView stayId={STAY} />);
     await screen.findByText('Ukupno');
     await user.click(screen.getByRole('button', { name: 'Naplati' }));
@@ -436,7 +451,7 @@ describe('FolioView: Naplati', () => {
       'Ovaj zahtev je već zabeležen, ali sa drugačijim podacima. Zatvorite prozor i proverite folio pre nego što pokušate ponovo.',
     );
     expect(screen.getByRole('dialog', { name: 'Naplata' })).toBeInTheDocument();
-    await waitFor(() => expect(folioReads(calls)).toBe(2));
+    await waitFor(() => expect(folioReads(calls)).toBe(3));
   });
 
   it('a conflict (folio_closed) closes the dialog, says why on the page and reads the folio again', async () => {
@@ -445,7 +460,7 @@ describe('FolioView: Naplati', () => {
     await user.click(within(dialog('Naplata')).getByRole('button', { name: 'Naplati' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByRole('alert')).toHaveTextContent('Folio je zatvoren i ne prima nove stavke ni plaćanja.');
-    await waitFor(() => expect(folioReads(calls)).toBe(2));
+    await waitFor(() => expect(folioReads(calls)).toBe(3));
   });
 });
 
@@ -605,7 +620,7 @@ describe('FolioView: Vrati novac', () => {
     expect(await within(dialog('Vrati novac')).findByRole('alert')).toHaveTextContent(
       'Povraćaj ne može biti veći od preplate na foliju (4.000,00 RSD).',
     );
-    await waitFor(() => expect(folioReads(calls)).toBe(2));
+    await waitFor(() => expect(folioReads(calls)).toBe(3));
   });
 });
 
@@ -679,7 +694,7 @@ describe('FolioView: Storniraj', () => {
     await user.click(within(dialog('Storniraj stavku')).getByRole('button', { name: 'Storniraj' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByRole('alert')).toHaveTextContent('Stavka je već stornirana.');
-    await waitFor(() => expect(folioReads(calls)).toBe(2));
+    await waitFor(() => expect(folioReads(calls)).toBe(3));
   });
 });
 
@@ -859,5 +874,211 @@ describe('FolioView: overlapping reads', () => {
     expect(reads).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('Ukupno')).toBeInTheDocument();
+  });
+});
+
+/** Folio reads in order: a folio patch is an answer, 'fail' is a lost connection; the last entry repeats. */
+function folioReadsScript(script: Array<Partial<Folio> | 'fail'>) {
+  let n = 0;
+  return () => {
+    const step = script[Math.min(n, script.length - 1)];
+    n += 1;
+    if (step === 'fail') throw new TypeError('Failed to fetch');
+    return { body: { ...FOLIO, ...step } };
+  };
+}
+
+const STALE_TEXT = 'Saldo nije mogao da se osveži. Naplata, povraćaj, zaduženja i storno su isključeni dok se ne osveži.';
+
+describe('FolioView: a stale balance (W1)', () => {
+  const WITH_ROWS: Partial<Folio> = { lines: [line()], payments: [payment()], paymentsMinor: 500_000, balanceMinor: 500_000 };
+
+  it.each([
+    ['Naplati', 'Naplata', 'owner'],
+    ['Dodaj zaduženje', 'Dodaj zaduženje', 'owner'],
+    ['Storniraj: Smeštaj 2.11.2026', 'Storniraj stavku', 'owner'],
+    [/^Storniraj plaćanje: Gotovina/, 'Storniraj plaćanje', 'owner'],
+  ] as const)('opening %s reads the folio again before the dialog shows', async (button, title, role) => {
+    const calls = mockFetch(routes({ role, folio: WITH_ROWS, extra: { [`GET /api/stays/${STAY}/folio`]: folioReadsScript([WITH_ROWS, WITH_ROWS]) } }));
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    expect(folioReads(calls)).toBe(1);
+    await user.click(screen.getByRole('button', { name: button }));
+    expect(await screen.findByRole('dialog', { name: title })).toBeInTheDocument();
+    expect(folioReads(calls)).toBe(2);
+  });
+
+  it('opening Vrati novac reads the folio again', async () => {
+    const credit = { chargesMinor: 1_000_000, paymentsMinor: 1_500_000, balanceMinor: -500_000 };
+    const calls = mockFetch(routes({ role: 'manager', extra: { [`GET /api/stays/${STAY}/folio`]: folioReadsScript([credit, credit]) } }));
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Vrati novac' }));
+    expect(await screen.findByRole('dialog', { name: 'Vrati novac' })).toBeInTheDocument();
+    expect(folioReads(calls)).toBe(2);
+  });
+
+  it('the amount offered in Naplati is the balance read when the dialog opens, not the one from the first read', async () => {
+    mockFetch(routes({ extra: { [`GET /api/stays/${STAY}/folio`]: folioReadsScript([{ balanceMinor: 2_000_000 }, { balanceMinor: 700_000, paymentsMinor: 1_300_000 }]) } }));
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    const d = await screen.findByRole('dialog', { name: 'Naplata' });
+    expect(within(d).getByLabelText('Iznos (RSD)')).toHaveValue('7.000,00');
+    expect(within(d).getByText('Saldo folija je 7.000,00 RSD.')).toBeInTheDocument();
+  });
+
+  it('when that read fails no dialog opens, the money buttons go off, and the screen says why with a retry', async () => {
+    const calls = mockFetch(routes({ role: 'manager', folio: WITH_ROWS, extra: { [`GET /api/stays/${STAY}/folio`]: folioReadsScript([WITH_ROWS, 'fail', WITH_ROWS]) } }));
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Naplati' })).toBeDisabled());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText(STALE_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dodaj zaduženje' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Storniraj: Smeštaj 2.11.2026' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Storniraj plaćanje: Gotovina/ })).toBeDisabled();
+    // Documents do not depend on the balance on screen.
+    expect(screen.getByRole('button', { name: 'Nefiskalni račun' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Pokušaj ponovo' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Naplati' })).toBeEnabled());
+    expect(screen.queryByText(STALE_TEXT)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(folioReads(calls)).toBe(3);
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    expect(await screen.findByRole('dialog', { name: 'Naplata' })).toBeInTheDocument();
+  });
+
+  it('two clicks on Naplati in one tick read the folio once and open one dialog', async () => {
+    const calls = mockFetch(routes());
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    const button = screen.getByRole('button', { name: 'Naplati' });
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+    expect(await screen.findByRole('dialog', { name: 'Naplata' })).toBeInTheDocument();
+    await settled();
+    expect(folioReads(calls)).toBe(2);
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('Vrati novac goes off with the others while the balance is stale', async () => {
+    const credit = { chargesMinor: 1_000_000, paymentsMinor: 1_500_000, balanceMinor: -500_000 };
+    mockFetch(routes({ role: 'manager', extra: { [`GET /api/stays/${STAY}/folio`]: folioReadsScript([credit, 'fail']) } }));
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Vrati novac' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Vrati novac' })).toBeDisabled());
+  });
+
+  it('a payment that went through but whose re-read failed leaves the money buttons off', async () => {
+    const calls = mockFetch(
+      routes({
+        extra: {
+          [`GET /api/stays/${STAY}/folio`]: folioReadsScript([{}, {}, 'fail']),
+          [`POST /api/stays/${STAY}/folio/payments`]: { status: 201, body: PAYMENT_VIEW },
+        },
+      }),
+    );
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Naplata' })).getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(postsTo(calls, `/stays/${STAY}/folio/payments`)).toHaveLength(1);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Naplati' })).toBeDisabled());
+    expect(screen.getByText(STALE_TEXT)).toBeInTheDocument();
+  });
+
+  it('after a lost response, Odustani reads the folio, so the balance shown is the paid one', async () => {
+    // The card payment committed, the answer never arrived: the next read shows the balance at zero.
+    const paid = { paymentsMinor: 2_345_600, balanceMinor: 0, payments: [payment()] };
+    const calls = mockFetch(
+      routes({
+        extra: {
+          [`GET /api/stays/${STAY}/folio`]: folioReadsScript([{}, {}, paid]),
+          [`POST /api/stays/${STAY}/folio/payments`]: () => {
+            throw new TypeError('Failed to fetch');
+          },
+        },
+      }),
+    );
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    expect(screen.getByText('Saldo').nextElementSibling).toHaveTextContent('20.000,00 RSD');
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    const d = await screen.findByRole('dialog', { name: 'Naplata' });
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    expect(await within(d).findByRole('alert')).toHaveTextContent('Server nije dostupan');
+    expect(folioReads(calls)).toBe(2);
+    await user.click(within(d).getByRole('button', { name: 'Odustani' }));
+    await waitFor(() => expect(folioReads(calls)).toBe(3));
+    await waitFor(() => expect(screen.getByText('Saldo').nextElementSibling).toHaveTextContent('0,00 RSD'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Escape closes a dialog and reads the folio as well', async () => {
+    const calls = mockFetch(routes({ extra: { [`GET /api/stays/${STAY}/folio`]: folioReadsScript([{}]) } }));
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Dodaj zaduženje' }));
+    await screen.findByRole('dialog', { name: 'Dodaj zaduženje' });
+    expect(folioReads(calls)).toBe(2);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(folioReads(calls)).toBe(3));
+  });
+
+  it('a retry inside one dialog keeps the key, and a dialog opened afterwards gets a new one', async () => {
+    let attempts = 0;
+    const calls = mockFetch(
+      routes({
+        extra: {
+          [`POST /api/stays/${STAY}/folio/payments`]: () => {
+            attempts += 1;
+            if (attempts < 3) throw new TypeError('Failed to fetch');
+            return { status: 201, body: PAYMENT_VIEW };
+          },
+        },
+      }),
+    );
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    const d = await screen.findByRole('dialog', { name: 'Naplata' });
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    await within(d).findByRole('alert');
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(attempts).toBe(2));
+    await user.click(within(d).getByRole('button', { name: 'Odustani' }));
+    await user.click(await screen.findByRole('button', { name: 'Naplati' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Naplata' })).getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(postsTo(calls, `/stays/${STAY}/folio/payments`)).toHaveLength(3));
+    const [a, b, c] = postsTo(calls, `/stays/${STAY}/folio/payments`).map((p) => (p.body as { key: string }).key);
+    expect(b).toBe(a);
+    expect(c).not.toBe(a);
   });
 });

@@ -35,6 +35,8 @@ const FOLIO_STATUS_LABELS: Record<FolioStatus, string> = {
   closed: 'Zatvoren',
 };
 
+const STALE_NOTICE = 'Saldo nije mogao da se osveži. Naplata, povraćaj, zaduženja i storno su isključeni dok se ne osveži.';
+
 const FISCAL_NOTICE = 'Fiskalizacija još nije uključena; plaćanja se beleže bez fiskalnog računa.';
 
 type Dialog =
@@ -80,6 +82,9 @@ export function FolioView({ stayId }: { stayId: string }) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [issuing, setIssuing] = useState<DocumentKind | null>(null);
   const issueInFlight = useRef(false);
+  // The last read of the folio failed: the balance on screen may be old, so no money action is offered.
+  const [stale, setStale] = useState(false);
+  const openingRef = useRef(false);
   const latest = useRef(0);
   const receiptKey = useIdempotencyKey();
   const proformaKey = useIdempotencyKey();
@@ -114,14 +119,47 @@ export function FolioView({ stayId }: { stayId: string }) {
     }
   }, [read]);
 
-  const refresh = useCallback(
-    () => load().catch((err: unknown) => setError(messageFor(err))),
-    [load],
-  );
+  /** Reads the folio again; false when that failed (the screen then keeps the money buttons off). */
+  const refresh = useCallback(async (): Promise<boolean> => {
+    try {
+      await load();
+      setStale(false);
+      return true;
+    } catch (err) {
+      setError(messageFor(err));
+      setStale(true);
+      return false;
+    }
+  }, [load]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /**
+   * A money dialog opens only on a fresh read: the amount it offers is the balance the
+   * server has now, not the one from before a lost response or another desk's payment.
+   */
+  async function openDialog(next: Dialog) {
+    if (openingRef.current) return;
+    openingRef.current = true;
+    try {
+      if (await refresh()) setDialog(next);
+    } finally {
+      openingRef.current = false;
+    }
+  }
+
+  /** Odustani and Escape: nothing is known to have happened, so the folio is read again. */
+  function closeDialog() {
+    setDialog(null);
+    void refresh();
+  }
+
+  async function retryRead() {
+    setError(null);
+    await refresh();
+  }
 
   async function done(text: string) {
     setDialog(null);
@@ -202,6 +240,14 @@ export function FolioView({ stayId }: { stayId: string }) {
         </p>
       )}
       {!folio && !error && <p className="muted">Učitavanje…</p>}
+      {folio && stale && (
+        <div className="error stale-read" role="alert">
+          <p>{STALE_NOTICE}</p>
+          <button type="button" className="secondary" onClick={() => void retryRead()}>
+            Pokušaj ponovo
+          </button>
+        </div>
+      )}
 
       {folio && (
         <>
@@ -233,7 +279,8 @@ export function FolioView({ stayId }: { stayId: string }) {
             canCorrect={canCorrect}
             chargeable={chargeable}
             issuing={issuing}
-            onOpen={setDialog}
+            stale={stale}
+            onOpen={(d) => void openDialog(d)}
             onIssue={(kind) => void issue(kind)}
           />
 
@@ -259,8 +306,8 @@ export function FolioView({ stayId }: { stayId: string }) {
             <LinesTable
               folio={folio}
               canReverse={canCorrect && folio.status === 'open'}
-              disabled={licence !== 'full'}
-              onReverse={(line) => setDialog({ type: 'reverse', line })}
+              disabled={licence !== 'full' || stale}
+              onReverse={(line) => void openDialog({ type: 'reverse', line })}
             />
           </section>
 
@@ -269,8 +316,8 @@ export function FolioView({ stayId }: { stayId: string }) {
             <PaymentsTable
               folio={folio}
               canVoid={canCorrect && folio.status === 'open'}
-              disabled={licence !== 'full'}
-              onVoid={(payment) => setDialog({ type: 'void', payment })}
+              disabled={licence !== 'full' || stale}
+              onVoid={(payment) => void openDialog({ type: 'void', payment })}
             />
           </section>
 
@@ -293,13 +340,13 @@ export function FolioView({ stayId }: { stayId: string }) {
       )}
 
       {folio && dialog?.type === 'charge' && (
-        <ChargeDialog stayId={stayId} rates={folio.vatRatesBp} onClose={() => setDialog(null)} onDone={() => done('Zaduženje je dodato.')} onRefused={refused} />
+        <ChargeDialog stayId={stayId} rates={folio.vatRatesBp} onClose={closeDialog} onDone={() => done('Zaduženje je dodato.')} onRefused={refused} />
       )}
       {folio && dialog?.type === 'pay' && (
-        <PayDialog stayId={stayId} balanceMinor={folio.balanceMinor} onClose={() => setDialog(null)} onDone={() => done('Naplata je zabeležena.')} onRefused={refused} />
+        <PayDialog stayId={stayId} balanceMinor={folio.balanceMinor} onClose={closeDialog} onDone={() => done('Naplata je zabeležena.')} onRefused={refused} />
       )}
       {folio && dialog?.type === 'refund' && (
-        <RefundDialog stayId={stayId} creditMinor={creditOf(folio)} onClose={() => setDialog(null)} onDone={() => done('Povraćaj je zabeležen.')} onRefused={refused} />
+        <RefundDialog stayId={stayId} creditMinor={creditOf(folio)} onClose={closeDialog} onDone={() => done('Povraćaj je zabeležen.')} onRefused={refused} />
       )}
       {dialog?.type === 'reverse' && (
         <ReasonDialog
@@ -307,7 +354,7 @@ export function FolioView({ stayId }: { stayId: string }) {
           submitLabel="Storniraj"
           intro={`Stavka „${dialog.line.description}“ (${formatRsd(dialog.line.amountMinor)}) dobija storno stavku. Original ostaje na foliju, precrtan.`}
           path={`/folio-lines/${dialog.line.id}/reverse`}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
           onDone={() => done('Stavka je stornirana.')}
           onRefused={refused}
         />
@@ -318,7 +365,7 @@ export function FolioView({ stayId }: { stayId: string }) {
           submitLabel="Storniraj"
           intro={`Plaćanje „${paymentMethodLabel(dialog.payment.method)}“ (${formatRsd(dialog.payment.amountMinor)}) dobija storno. Original ostaje na foliju, precrtan.`}
           path={`/payments/${dialog.payment.id}/void`}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
           onDone={() => done('Plaćanje je stornirano.')}
           onRefused={refused}
         />
@@ -335,6 +382,7 @@ function FolioActions({
   canCorrect,
   chargeable,
   issuing,
+  stale,
   onOpen,
   onIssue,
 }: {
@@ -343,6 +391,7 @@ function FolioActions({
   canCorrect: boolean;
   chargeable: boolean;
   issuing: DocumentKind | null;
+  stale: boolean;
   onOpen: (dialog: Dialog) => void;
   onIssue: (kind: DocumentKind) => void;
 }) {
@@ -359,17 +408,17 @@ function FolioActions({
     <div className="stack folio-actions-block">
       <div className="folio-actions">
         {open && chargeable && (
-          <button type="button" disabled={licence !== 'full'} onClick={() => onOpen({ type: 'charge' })}>
+          <button type="button" disabled={licence !== 'full' || stale} onClick={() => onOpen({ type: 'charge' })}>
             Dodaj zaduženje
           </button>
         )}
         {open && (
-          <button type="button" disabled={licence === 'none'} onClick={() => onOpen({ type: 'pay' })}>
+          <button type="button" disabled={licence === 'none' || stale} onClick={() => onOpen({ type: 'pay' })}>
             Naplati
           </button>
         )}
         {open && canCorrect && creditOf(folio) > 0 && (
-          <button type="button" className="secondary" disabled={licence === 'none'} onClick={() => onOpen({ type: 'refund' })}>
+          <button type="button" className="secondary" disabled={licence === 'none' || stale} onClick={() => onOpen({ type: 'refund' })}>
             Vrati novac
           </button>
         )}
