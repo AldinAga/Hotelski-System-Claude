@@ -120,6 +120,10 @@ describe('messageFor', () => {
       'common/input.ts',
       // The night audit: the close dialog and the closed-day screens (Task 12).
       'business-day/night-audit.service.ts',
+      'business-day/business-day.service.ts',
+      'business-day/settings.service.ts',
+      // The legal profile form (Task 12).
+      'legal/legal-profile.service.ts',
       // Check-in, check-out and the guests of a stay (Task 10).
       'stays/stay-lifecycle.service.ts',
       'guests/guests.service.ts',
@@ -154,6 +158,24 @@ describe('messageFor', () => {
     expect(messageFor(new ApiError(409, 'folio_balance_open', 'x', { balanceMinor: 500000 }))).toBe(
       'Saldo folija nije nula (5.000,00 RSD). Naplatite ili vratite razliku pre odjave.',
     );
+  });
+
+  it('the day close refusals name their days as D.M.YYYY', () => {
+    expect(messageFor(new ApiError(409, 'business_day_in_future', 'x', { day: '2026-11-03', today: '2026-11-02' }))).toBe(
+      'Poslovni dan 3.11.2026 još nije počeo (danas je 2.11.2026) i ne može da se zatvori.',
+    );
+    expect(messageFor(new ApiError(409, 'business_day_mismatch', 'x', { open: '2026-11-03' }))).toBe(
+      'Otvoren je drugi poslovni dan (3.11.2026). Osvežite prikaz.',
+    );
+  });
+
+  it('the settings fields are named as the forms name them', () => {
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'autoCloseTime' }))).toBe('Proverite polje „Vreme automatskog zatvaranja“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'vatRatesBp' }))).toBe('Proverite polje „Dozvoljene PDV stope“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'taxId' }))).toBe('Proverite polje „PIB“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'noShowCharge' }))).toBe('Proverite polje „Naplata kad gost ne dođe“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'accommodationVatBp' }))).toBe('Proverite polje „PDV stopa smeštaja“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'day' }))).toBe('Proverite polje „Poslovni dan“.');
   });
 
   it('the dictionary has no Cyrillic letters', () => {

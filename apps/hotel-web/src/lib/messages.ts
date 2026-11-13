@@ -189,11 +189,16 @@ const FIELD_LABELS: Record<string, string> = {
   guestId: 'Gost',
   firstName: 'Ime',
   lastName: 'Prezime',
-  phone: 'Telefon',
   'guest.firstName': 'Ime',
   'guest.lastName': 'Prezime',
   'guest.email': 'E-adresa',
   'guest.phone': 'Telefon',
+  // business settings and the day close (Task 12)
+  autoCloseTime: 'Vreme automatskog zatvaranja',
+  noShowCharge: 'Naplata kad gost ne dođe',
+  accommodationVatBp: 'PDV stopa smeštaja',
+  vatRatesBp: 'Dozvoljene PDV stope',
+  day: 'Poslovni dan',
 };
 
 /** "stays[0].adults" → "adults": the forms show one stay at a time. */
@@ -210,7 +215,8 @@ function fill(template: string, details: Record<string, unknown> | null): string
       return '';
     }
     if (key === 'field') return fieldLabel(String(v));
-    if ((key === 'day' || key === 'arrival' || key === 'businessDate') && typeof v === 'string') return formatDate(v);
+    const isDayKey = key === 'day' || key === 'arrival' || key === 'businessDate' || key === 'today' || key === 'open';
+    if (isDayKey && typeof v === 'string') return formatDate(v);
     if (key === 'balanceMinor' && typeof v === 'number') return formatRsd(v);
     return String(v);
   });
