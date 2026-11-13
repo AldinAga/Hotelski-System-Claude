@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { InventoryModule } from '../inventory/inventory.module';
+import { MailModule } from '../mail/mail.module';
 import { RatesModule } from '../rates/rates.module';
 import { ReservationsController, StaysController } from './reservations.controller';
 import { ReservationsService } from './reservations.service';
 
 // ReservationsService.book is the one way any source makes a stay (spec 5.7).
 @Module({
-  imports: [InventoryModule, RatesModule],
+  imports: [InventoryModule, RatesModule, MailModule],
   controllers: [ReservationsController, StaysController],
   providers: [ReservationsService],
   exports: [ReservationsService],

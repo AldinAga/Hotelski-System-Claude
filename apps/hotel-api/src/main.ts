@@ -11,6 +11,7 @@ import { PG_POOL } from './db/tokens';
 import { migrate } from './db/migrate';
 import { LicenceService } from './licensing/licence.service';
 import { NightAuditScheduler } from './business-day/night-audit.scheduler';
+import { OutboxDispatcher } from './mail/outbox.dispatcher';
 
 const port = Number(process.env.HOTEL_API_PORT ?? 4200);
 
@@ -32,6 +33,8 @@ async function bootstrap(): Promise<void> {
     await app.get(LicenceService).start();
     // After the licence: the automatic night audit checks it at every tick. Stopped on shutdown (OnModuleDestroy).
     app.get(NightAuditScheduler).start();
+    // The e-mail dispatcher: sends what bookIn and cancel queued. Stopped on shutdown (OnModuleDestroy).
+    app.get(OutboxDispatcher).start();
     await app.listen(port);
   } catch (err) {
     // Stop timers and pools of the half-started app; the port stays free for

@@ -110,6 +110,11 @@ export const MESSAGES: Record<string, string> = {
   // folio documents (non-fiscal receipt, pro forma)
   document_empty: 'Folio nema nijednu stavku ni plaćanje, pa dokument ne može da se izda.',
   document_not_found: 'Dokument ne postoji. Osvežite stranicu.',
+
+  // e-mails to guests (outbox)
+  message_not_found: 'Poruka ne postoji. Osvežite stranicu.',
+  message_already_sent: 'Poruka je već poslata gostu.',
+  message_has_no_recipient: 'Gost nema e-adresu, pa poruka ne može da se pošalje.',
 };
 
 /** Field names in validation_failed details, as the forms label them. */

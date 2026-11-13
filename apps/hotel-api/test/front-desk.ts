@@ -4,12 +4,15 @@ import type { LicensePayload } from '@platform/licensing';
 import request from 'supertest';
 import { BusinessDayService } from '../src/business-day/business-day.service';
 import { PropertyContext } from '../src/common/property-context';
+import { DB } from '../src/db/tokens';
 import { ActivationService } from '../src/licensing/activation.service';
 import { CentralAdminClient } from '../src/licensing/central-admin.client';
 import { LicenceService } from '../src/licensing/licence.service';
 import { parseRootKeySet } from '../src/licensing/licensing.config';
 import { SecretBox } from '../src/licensing/secret-box';
-import { createTestApp, type TestApp } from './app';
+import type { MailMessage, MailTransport } from '../src/mail/mail-transport';
+import { OutboxDispatcher } from '../src/mail/outbox.dispatcher';
+import { createTestApp, TEST_MAIL_FROM, type TestApp } from './app';
 import { seedUser, sessionCookieFor } from './auth-helpers';
 import { startFakeCentralAdmin, type FakeCentralAdmin } from './fake-central-admin';
 
@@ -20,6 +23,53 @@ import { startFakeCentralAdmin, type FakeCentralAdmin } from './fake-central-adm
 
 export const NOW = new Date('2026-11-02T08:00:00Z'); // 09:00 Belgrade; the property's "today" is 2026-11-02
 export const DAY_MS = 86_400_000;
+
+/**
+ * A mail transport that records what it sends. failNext queues errors thrown by
+ * the next sends (in order); holdNext makes the next send wait until released,
+ * to freeze a dispatcher in the middle of a send.
+ */
+export class FakeMailTransport implements MailTransport {
+  readonly configured = true;
+  /** Messages delivered. */
+  readonly sent: MailMessage[] = [];
+  /** Every message handed to send, failed ones included. */
+  readonly attempted: MailMessage[] = [];
+  private failures: Error[] = [];
+  private holds: Array<{ entered: () => void; gate: Promise<void> }> = [];
+
+  failNext(err: Error): void {
+    this.failures.push(err);
+  }
+
+  holdNext(): { entered: Promise<void>; release: () => void } {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((r) => (enter = r));
+    const gate = new Promise<void>((r) => (release = r));
+    this.holds.push({ entered: enter, gate });
+    return { entered, release };
+  }
+
+  async send(m: MailMessage): Promise<void> {
+    const hold = this.holds.shift();
+    if (hold) {
+      hold.entered();
+      await hold.gate;
+    }
+    this.attempted.push(m);
+    const failure = this.failures.shift();
+    if (failure) throw failure;
+    this.sent.push(m);
+  }
+
+  clear(): void {
+    this.sent.length = 0;
+    this.attempted.length = 0;
+    this.failures = [];
+    this.holds = [];
+  }
+}
 
 export interface Target {
   typeId: string;
@@ -45,6 +95,12 @@ export interface FrontDesk {
    * clock past that needs fresh cookies (same users).
    */
   travel(at: Date): Promise<void>;
+  /** The recording mail transport the app sends through (unless startFrontDesk got its own `mail`). */
+  mail: FakeMailTransport;
+  /** The app's own dispatcher (no timer runs it in tests). */
+  dispatcher: OutboxDispatcher;
+  /** Another dispatcher on the same database and clock, as a second process would be. */
+  newDispatcher(transport?: MailTransport): OutboxDispatcher;
   /** The licence clock, for safe mode: shiftLicence(400 * DAY_MS) is past valid_until and grace_until. */
   shiftLicence(ms: number): void;
   /**
@@ -94,14 +150,16 @@ export interface FrontDesk {
 export const DEFAULT_HOLDER = { firstName: 'Petar', lastName: 'Petrović', email: 'petar@example.com' };
 
 /** `poolMax`: the app's pool client limit, for suites whose race tests hold more than nine transactions (Ruling 27a). */
-export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<FrontDesk> {
+export async function startFrontDesk(opts: { poolMax?: number; mail?: MailTransport } = {}): Promise<FrontDesk> {
   const fake = await startFakeCentralAdmin();
   let now = NOW;
   let licenceShiftMs = 0;
   let planId: string | null = null;
   let userIds: Record<'owner' | 'manager' | 'receptionist' | 'housekeeping', string> | null = null;
+  const mail = new FakeMailTransport();
   const ta = await createTestApp({
     poolMax: opts.poolMax,
+    mail: opts.mail ?? mail,
     clock: () => now,
     licensing: {
       client: new CentralAdminClient({ baseUrl: fake.url, allowHttp: true }),
@@ -122,6 +180,9 @@ export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<F
     receptionist: '',
     housekeeping: '',
     managerId: '',
+    mail,
+    dispatcher: app.get(OutboxDispatcher),
+    newDispatcher: (transport = mail) => new OutboxDispatcher(app.get(DB), () => now, transport, TEST_MAIL_FROM),
     setNow(at) {
       now = at;
     },
@@ -140,6 +201,7 @@ export async function startFrontDesk(opts: { poolMax?: number } = {}): Promise<F
       now = NOW;
       licenceShiftMs = 0;
       planId = null;
+      mail.clear();
       await ta.reset();
       await app.get(ActivationService).activate(
         fake.issueCode({

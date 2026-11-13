@@ -16,6 +16,7 @@ import { PropertyContext } from '../common/property-context';
 import { DB, type Db, type Tx } from '../db/tokens';
 import { parseGuestInput, stayGuestsOf, type StayGuestView } from '../guests/guests.service';
 import { InventoryService, scopeFor, scopeOrder, type Scope } from '../inventory/inventory.service';
+import { OutboxService } from '../mail/outbox.service';
 import { RatesService } from '../rates/rates.service';
 import { validateStayDates, MAX_STAY_NIGHTS, type StayDatesReason } from './stay-dates';
 
@@ -293,6 +294,7 @@ export class ReservationsService {
     private readonly property: PropertyContext,
     private readonly inventory: InventoryService,
     private readonly rates: RatesService,
+    private readonly outbox: OutboxService,
   ) {}
 
   // ---- book ----
@@ -377,6 +379,8 @@ export class ReservationsService {
       });
     }
 
+    // The confirmation e-mail is queued in this transaction (Task 9), before the audit row.
+    await this.outbox.enqueueReservation(tx, propertyId, 'reservation_confirmed', reservationId);
     await this.audit.record(tx, {
       propertyId,
       actorUserId: actor.id,
@@ -567,6 +571,8 @@ export class ReservationsService {
       await tx.execute(sql`
         UPDATE reservation SET status = 'cancelled', version = ${next}
          WHERE id = ${id} AND property_id = ${propertyId}`);
+      // The cancellation e-mail is queued in this transaction (Task 9), before the audit row.
+      await this.outbox.enqueueReservation(tx, propertyId, 'reservation_cancelled', id);
       await this.audit.record(tx, {
         propertyId,
         actorUserId: actor.id,
