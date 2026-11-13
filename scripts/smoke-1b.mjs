@@ -15,11 +15,17 @@
 //     [--allow-close] [--mail-to <address>] [--mail-wait <seconds>]
 //
 // UPOZORENJE (zatvaranje poslovnog dana je trajno i menja prave podatke):
-//   --allow-close zatvara poslovni dan. Prvo zatvaranje kasnog poslovnog dana
-//   označava kao no-show SVAKU potvrđenu rezervaciju čiji gost nije prijavljen,
-//   sa dolaskom do tog dana (uključujući taj dan). To su pravi gosti objekta, a
-//   zatvoren dan se ne može ponovo otvoriti. Bez --allow-close skripta ne zatvara
-//   nijedan dan i staje ako poslovni dan kasni za kalendarom.
+//   --allow-close zatvara poslovne dane. Zatvara svaki dan koji kasni za kalendarom.
+//   Zatim zatvara i DANAŠNJI dan, jer smoke u tom koraku zatvara dan u kojem je gost.
+//   Svako zatvaranje označava kao no-show SVAKU potvrđenu rezervaciju čiji gost nije
+//   prijavljen, sa dolaskom do tog dana (uključujući taj dan). Prvo noćenje se može
+//   naplatiti, ako podešavanje objekta to traži. Posle toga recepcija radi na sutrašnjem
+//   danu. Svako pokretanje sa --allow-close na novi kalendarski dan zatvara taj dan.
+//   To su pravi gosti objekta, a zatvoren dan se ne može ponovo otvoriti.
+//   Bez --allow-close skripta ne zatvara nijedan dan i staje ako poslovni dan kasni.
+//   Ali i bez te opcije skripta upisuje prave podatke: izmiruje ostatke gosta
+//   "Smoke Test 1b" na jedinicama S-1 i S-2 (pre provere dana), pa na dan koji ne kasni
+//   pravi rezervaciju, zaduženje, uplate, odjavu i račun N-... (troši broj računa).
 //
 // Dates. Every date comes from GET /business-day (the API's own clock and time
 // zone), never from this computer's clock.
@@ -38,11 +44,18 @@
 // closed business days (with --allow-close), non-fiscal receipts N-..., plus
 // unit type SMOKE, plan SMOKE and units S-1, S-2 (made by smoke-1a or here).
 //
+// One reservation per business day: it keeps S-1 or S-2 for [B, B+1) and the other
+// unit is taken by the next run, so a third run on one business day fails with
+// "S-1 i S-2 su zauzete za tu noć" (run it after the close moved the day, or the
+// next calendar day).
+// A crash between the check-out and the receipt leaves that stay without a receipt:
+// the next run does not look at checked-out stays, so it does not issue one.
+//
 // Works only while Turnstile is off: the sign-in sends no token, so with
 // TURNSTILE_* keys set the API answers 403 captcha_failed.
 //
-// The password comes from --password or HOTEL_SMOKE_PASSWORD (at least 10
-// characters). The TOTP URI, the TOTP secret and the password are never printed.
+// The password comes only from HOTEL_SMOKE_PASSWORD (at least 10 characters; a
+// flag would show it in the shell history and the process list). The TOTP URI, the TOTP secret and the password are never printed.
 //
 // Prints "OK <step>[: detail]" or "SKIP <step>: <why>" per step; the first failure
 // prints "FAIL <step>: ..." and exits 1. Exit 0 only when every step passed or
@@ -60,14 +73,18 @@ const HELP = `Upotreba:
   --email       e-adresa vlasnika (ili menadžera)
   --totp        šestocifreni kod iz aplikacije za autentifikaciju
   --totp-file   fajl sa otpauth:// adresom; kod se računa iz nje, adresa se ne ispisuje
-  --password    lozinka (ili promenljiva HOTEL_SMOKE_PASSWORD, najmanje 10 znakova)
+  lozinka       samo iz promenljive HOTEL_SMOKE_PASSWORD (najmanje 10 znakova); nema opcije jer bi lozinka ostala u istoriji ljuske
   --mail-to     boravku se daje ova e-adresa i proverava se poruka potvrde rezervacije
   --mail-wait   koliko sekundi čekati da poruka bude poslata (podrazumevano 20)
-  --allow-close DOZVOLJAVA ZATVARANJE POSLOVNOG DANA. To je trajno i menja prave podatke objekta:
-                prvo zatvaranje kasnog poslovnog dana označava kao no-show svaku potvrđenu rezervaciju
-                čiji gost nije prijavljen, sa dolaskom do tog dana (uključujući taj dan). Zatvoren dan
-                se ne može ponovo otvoriti. Bez ove opcije skripta ne zatvara nijedan dan i staje sa
-                greškom ako poslovni dan kasni za kalendarom.
+  --allow-close DOZVOLJAVA ZATVARANJE POSLOVNIH DANA. To je trajno i menja prave podatke objekta.
+                Zatvara svaki dan koji kasni, a zatim i DANAŠNJI dan. Svako zatvaranje označava kao
+                no-show svaku potvrđenu rezervaciju čiji gost nije prijavljen, sa dolaskom do tog dana
+                (uključujući taj dan). Prvo noćenje se može naplatiti, ako podešavanje objekta to traži.
+                Posle toga recepcija radi na sutrašnjem danu. Svako pokretanje sa ovom opcijom na novi
+                kalendarski dan zatvara taj dan. Zatvoren dan se ne može ponovo otvoriti.
+                Bez ove opcije skripta ne zatvara nijedan dan i staje ako poslovni dan kasni. Ostaci gosta
+                "Smoke Test 1b" na S-1 i S-2 se ipak izmiruju, a na dan koji ne kasni pravi se rezervacija,
+                zaduženje, uplate, odjava i račun N-... (troši broj računa).
   --help        ovaj tekst
 `;
 
@@ -83,7 +100,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 
 const api = (arg('api', '') ?? '').replace(/\/+$/, '');
 const email = arg('email');
-const password = arg('password', process.env.HOTEL_SMOKE_PASSWORD);
+const password = process.env.HOTEL_SMOKE_PASSWORD;
 const totpGiven = arg('totp');
 const totpFile = arg('totp-file');
 const mailTo = arg('mail-to');
@@ -97,7 +114,7 @@ function usage(problem) {
 }
 if (!api) usage('--api je obavezan');
 if (!email) usage('--email je obavezan (vlasnik objekta, bez podrazumevane vrednosti)');
-if (!password || password.length < 10) usage('--password ili HOTEL_SMOKE_PASSWORD (najmanje 10 znakova) je obavezan');
+if (!password || password.length < 10) usage('HOTEL_SMOKE_PASSWORD (najmanje 10 znakova) je obavezan');
 if (mailTo !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailTo)) usage('--mail-to nije ispravna e-adresa');
 if (!Number.isFinite(mailWaitSeconds) || mailWaitSeconds < 0 || mailWaitSeconds > 300) usage('--mail-wait mora biti od 0 do 300 sekundi');
 
@@ -315,9 +332,15 @@ await step('licence', async () => {
 await step('leftovers', async () => {
   const view = expectStatus(await call('GET', '/business-day'), 200);
   let settled = 0;
+  // Only the smoke units: a guest of this name elsewhere is a real guest.
+  const smokeUnits = new Set(
+    expectStatus(await call('GET', '/units'), 200)
+      .filter((u) => ['S-1', 'S-2'].includes(u.name))
+      .map((u) => u.id),
+  );
   for (const s of await smokeReservations(addDays(view.day, -1))) {
     const r = await reservationOf(s.id);
-    for (const stay of r.stays.filter((x) => x.status === 'in_house')) {
+    for (const stay of r.stays.filter((x) => x.status === 'in_house' && smokeUnits.has(x.unitId))) {
       await settleBalance(stay.id);
       await checkOut(stay.id, r.id);
       settled += 1;
