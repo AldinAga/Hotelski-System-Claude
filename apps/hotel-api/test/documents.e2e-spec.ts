@@ -195,6 +195,27 @@ describe('folio documents (e2e)', () => {
     expect(results.map((r) => r.body.number).sort()).toEqual(['N-2026-000001', 'N-2026-000002']);
   });
 
+  it('one key on two stays at once (a receipt and a pro forma): one document, the other is 409 idempotency_key_reused', async () => {
+    const a = await inHouse(0, '2026-11-02', '2026-11-03');
+    const b = await inHouse(1, '2026-11-02', '2026-11-03');
+    await pay(a.stayId, 10_000, 'pay-cross-0001');
+    await pay(b.stayId, 10_000, 'pay-cross-0002');
+    // Different kinds take different counter rows, so only the unique index can stop the second.
+    const results = await fd.raceUnderHeldDay(2, () => [issue(a.stayId, 'receipt', 'doc-cross-0001'), issue(b.stayId, 'proforma', 'doc-cross-0001')]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(results.find((r) => r.status === 409)!.body.code).toBe('idempotency_key_reused');
+    expect(await fd.sql('SELECT 1 FROM folio_document')).toHaveLength(1);
+  });
+
+  it('a pro forma of a cancelled stay lists no expected nights', async () => {
+    const b = await fd.bookStay({ typeId, planId }, '2026-11-05', '2026-11-07');
+    await pay(b.stayId, 10_000, 'pay-cancel-001');
+    expect((await fd.post(`/reservations/${b.reservationId}/cancel`, { version: b.version })).status).toBe(200);
+    const res = await issue(b.stayId, 'proforma', 'doc-cancel-001');
+    expect(res.status).toBe(201);
+    expect(res.body.content).toMatchObject({ lines: [], totalMinor: 0, paidMinor: 10_000, dueMinor: -10_000 });
+  });
+
   it('in safe mode documents are issued and read', async () => {
     const s = await inHouse(0, '2026-11-02', '2026-11-03');
     await pay(s.stayId, 10_000, 'pay-safe-0001');
@@ -207,10 +228,15 @@ describe('folio documents (e2e)', () => {
 
   it("seller.registryId of a natural person is masked, and the full JMBG is stored nowhere in the document", async () => {
     await fd.put('/legal-profile', { kind: 'natural_person', legalName: 'Marko Marković', registryId: JMBG, address: 'Selo 1', city: 'Zlatibor' });
+    await fd.put('/settings/business', { accommodationVatBp: 1000 });
     const b = await fd.bookStay({ typeId, planId }, '2026-11-05', '2026-11-06');
     const res = await issue(b.stayId, 'proforma', 'doc-natural-01');
     expect(res.status).toBe(201);
-    expect(res.body.content.seller).toMatchObject({ legalName: 'Marko Marković', registryId: MASKED_JMBG, taxId: null });
+    expect(res.body.content.seller).toMatchObject({ legalName: 'Marko Marković', registryId: MASKED_JMBG, taxId: null, vatPayer: false });
+    // Every line has a rate, but the seller is not a VAT payer: no VAT recap.
+    expect(res.body.content.lines.map((l: { vatRateBp: number | null }) => l.vatRateBp)).toEqual([1000]);
+    expect(res.body.content.vat).toBeNull();
+    expect(await fd.sql(`SELECT 1 FROM audit_log WHERE action = 'folio.document' AND after::text LIKE $1`, [`%${JMBG}%`])).toHaveLength(0);
     expect(await fd.sql(`SELECT 1 FROM folio_document WHERE content::text LIKE $1`, [`%${JMBG}%`])).toHaveLength(0);
   });
 
