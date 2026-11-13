@@ -66,6 +66,31 @@ export function formatRsd(minor: number): string {
   return `${sign}${whole},${para} RSD`;
 }
 
+/** Minor units → "20.000,00": what an amount field shows, and what parseRsd reads back (no currency). */
+export function formatAmountInput(minor: number): string {
+  return formatRsd(minor).replace(/ RSD$/, '');
+}
+
+/** VAT rate in basis points → "20 %", "6,5 %". */
+export function formatVatRate(bp: number): string {
+  return `${String(bp / 100).replace('.', ',')} %`;
+}
+
+/** A timestamp as the property's calendar date and clock time, e.g. "13.11.2026 14:05". */
+export function formatDateTime(value: string): string {
+  const t = Date.parse(value);
+  if (Number.isNaN(t)) return value;
+  const at = new Date(t);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: PROPERTY_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${formatDay(dayInZone(at))} ${get('hour')}:${get('minute')}`;
+}
+
 /**
  * Dinars typed by a person → minor units, or null when it is not an amount.
  * Accepts "5500", "5.500", "5500,50" and "5.500,50"; never goes through a

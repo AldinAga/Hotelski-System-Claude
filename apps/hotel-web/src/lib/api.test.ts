@@ -7,6 +7,16 @@ import { MESSAGES, messageFor } from './messages';
 
 const go = () => navigation.go;
 
+/** The error codes a hotel-api source file can throw: DomainError('code') and reasons returned as values. */
+function codesIn(file: string): string[] {
+  const text = readFileSync(file, 'utf8');
+  const codes: string[] = [];
+  for (const m of text.matchAll(/DomainError\(\s*'([a-z_]+)'/g)) codes.push(m[1]);
+  // Reasons returned as values and thrown by the caller (stay dates, quote).
+  for (const m of text.matchAll(/reason: '([a-z_]+)'/g)) codes.push(m[1]);
+  return codes;
+}
+
 beforeEach(() => {
   vi.spyOn(navigation, 'go').mockImplementation(() => undefined);
   window.history.replaceState(null, '', '/podesavanja/jedinice');
@@ -123,15 +133,44 @@ describe('messageFor', () => {
       // Check-in, check-out and the guests of a stay (Task 10).
       'stays/stay-lifecycle.service.ts',
       'guests/guests.service.ts',
+      // The folio and its documents (Task 11).
+      'folio/folio.service.ts',
+      'folio/documents.service.ts',
     ]) {
-      const text = readFileSync(resolve(api, file), 'utf8');
-      for (const m of text.matchAll(/DomainError\(\s*'([a-z_]+)'/g)) codes.add(m[1]);
-      // Reasons returned as values and thrown by the caller (stay dates, quote).
-      for (const m of text.matchAll(/reason: '([a-z_]+)'/g)) codes.add(m[1]);
+      for (const c of codesIn(resolve(api, file))) codes.add(c);
     }
     // A floor, so a broken pattern cannot pass with nothing found.
     expect(codes.size).toBeGreaterThanOrEqual(20);
     expect([...codes].filter((c) => !MESSAGES[c])).toEqual([]);
+  });
+
+  it('covers every code of the folio and the documents, read from their two services', () => {
+    const folio = resolve(__dirname, '../../../hotel-api/src/folio');
+    const codes = [...new Set([...codesIn(resolve(folio, 'folio.service.ts')), ...codesIn(resolve(folio, 'documents.service.ts'))])];
+    // The scan must really find the folio's own codes, or an empty scan would pass.
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        'folio_closed',
+        'idempotency_key_reused',
+        'refund_exceeds_credit',
+        'line_already_reversed',
+        'payment_already_voided',
+        'document_empty',
+        'document_not_found',
+      ]),
+    );
+    expect(codes.filter((c) => !MESSAGES[c])).toEqual([]);
+  });
+
+  it('refund_exceeds_credit shows the credit in dinars', () => {
+    expect(messageFor(new ApiError(422, 'refund_exceeds_credit', 'x', { creditMinor: 150050 }))).toBe(
+      'Povraćaj ne može biti veći od preplate na foliju (1.500,50 RSD).',
+    );
+  });
+
+  it('a folio field in validation_failed is named as the dialogs name it', () => {
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'amountMinor' }))).toBe('Proverite polje „Iznos“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'vatRateBp' }))).toBe('Proverite polje „PDV stopa“.');
   });
 
   it('a stay field in validation_failed is named as the form names it', () => {

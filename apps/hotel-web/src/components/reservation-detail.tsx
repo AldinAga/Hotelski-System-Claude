@@ -157,6 +157,9 @@ export function ReservationDetail({ id }: { id: string }) {
                       .join(' · ')}
                   </div>
                   <div>{`Iznos: ${formatRsd(s.totalMinor)}`}</div>
+                  <div>
+                    <a href={`/folio/${s.id}`}>Folio</a>
+                  </div>
                   {s.unitTypeId !== null && MOVABLE_STAY.has(s.status) && MOVABLE_RESERVATION.has(r.status) && (
                     <StayUnitPicker
                       key={`${s.id}:${s.unitId ?? ''}`}
