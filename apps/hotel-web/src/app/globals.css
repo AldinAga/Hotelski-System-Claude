@@ -1622,8 +1622,10 @@ body.modal-open {
   margin: 14mm;
 }
 
+/* `size` takes one or two lengths, or `auto`, never both: "80mm auto" is dropped and the roll falls back to A4.
+   The height is one page length; a longer receipt continues on the next page. */
 @page roll {
-  size: 80mm auto;
+  size: 80mm 297mm;
   margin: 3mm;
 }
 

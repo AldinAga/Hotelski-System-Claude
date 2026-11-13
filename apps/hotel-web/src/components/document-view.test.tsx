@@ -269,8 +269,28 @@ describe('print stylesheet', () => {
 
   it('prints on A4 by default and on an 80 mm roll for the thermal layout', () => {
     expect(css).toMatch(/@page\s*\{[^}]*size:\s*A4/);
-    expect(css).toMatch(/@page\s+roll\s*\{[^}]*size:\s*80mm\s+auto/);
     expect(css).toMatch(/\.doc--thermal\s*\{[^}]*page:\s*roll/);
+  });
+
+  // CSS Paged Media: size = auto | <length>{1,2} | [ <page-size> || [ portrait | landscape ] ].
+  // `80mm auto` is none of them, so a browser drops it and the roll falls back to A4 (W3).
+  const SIZE_GRAMMAR = /^(?:auto|(?:\d+(?:\.\d+)?mm)(?:\s+\d+(?:\.\d+)?mm)?|(?:A[3-5]|B[4-5]|letter|legal|ledger)(?:\s+(?:portrait|landscape))?|(?:portrait|landscape)(?:\s+(?:A[3-5]|B[4-5]|letter|legal|ledger))?)$/i;
+
+  it('every @page size in the stylesheet is a value the CSS grammar allows', () => {
+    const sizes = [...css.matchAll(/@page[^{]*\{[^}]*?\bsize:\s*([^;}]+)/g)].map((m) => m[1].trim());
+    expect(sizes.length).toBeGreaterThanOrEqual(2);
+    for (const size of sizes) expect(size, `size: ${size}`).toMatch(SIZE_GRAMMAR);
+  });
+
+  it('the 80 mm roll has two lengths, 80 mm wide, and no "auto" next to a length', () => {
+    const roll = /@page\s+roll\s*\{[^}]*?\bsize:\s*([^;}]+)/.exec(css)?.[1].trim();
+    expect(roll).toMatch(/^80mm\s+\d+(?:\.\d+)?mm$/);
+    expect(roll).not.toMatch(/auto/);
+  });
+
+  it('only the thermal layout takes the roll page; the A4 layout stays on the default page', () => {
+    expect(css).not.toMatch(/\.doc--a4\s*\{[^}]*page:/);
+    expect(css).toMatch(/\.doc--thermal\s*\{[^}]*page:\s*roll\s*;/);
   });
 
   it('prints the document on white without its screen frame', () => {
