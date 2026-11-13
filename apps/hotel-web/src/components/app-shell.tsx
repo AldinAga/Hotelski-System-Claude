@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { BackToTop } from './back-to-top';
 import { LicenceBanner } from './licence-banner';
+import { BusinessMenu } from './nav-links';
 import { NewReservationLink } from './new-reservation-link';
 import { SignOutButton } from './sign-out-button';
 
@@ -13,6 +14,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <NewReservationLink />
         <a href="/podesavanja/jedinice">Jedinice</a>
         <a href="/podesavanja/cene">Cene</a>
+        <BusinessMenu />
         <span className="spacer" />
         <SignOutButton />
       </nav>
