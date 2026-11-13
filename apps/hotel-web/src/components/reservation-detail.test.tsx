@@ -258,6 +258,16 @@ describe('ReservationDetail: check-in, check-out, guests and mail', () => {
     expect(calls.filter((c) => c.url === `/api/reservations/${RES}`)).toHaveLength(2);
   });
 
+  it('a business day that lags behind the calendar: the guest arriving today gets the reason and the link (W2)', async () => {
+    // Open day 27.10., the calendar says 28.10.: the arrival of 28.10. waits for the close.
+    mockFetch(routes('VALID', { 'GET /api/business-day': { body: { day: '2026-10-27', today: '2026-10-28', lagDays: 1 } } }));
+    render(<ReservationDetail id={RES} />);
+    expect(await screen.findByText('28.10.2026 – 3.11.2026')).toBeInTheDocument();
+    expect(await screen.findByText(/Poslovni dan 27\.10\.2026 nije zatvoren\./)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Zatvorite dan' })).toHaveAttribute('href', '/poslovni-dan');
+    expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
+  });
+
   it('without an open business day check-in is not offered', async () => {
     mockFetch(routes('VALID', { 'GET /api/business-day': apiError(500, 'unknown') }));
     render(<ReservationDetail id={RES} />);

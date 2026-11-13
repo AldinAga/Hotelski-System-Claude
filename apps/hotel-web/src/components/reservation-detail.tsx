@@ -33,6 +33,8 @@ export function ReservationDetail({ id }: { id: string }) {
   const readOnly = licence !== 'full';
   const [r, setR] = useState<Reservation | null>(null);
   const [businessDate, setBusinessDate] = useState<string | null>(null);
+  // The calendar date and the lag of the business day behind it: a late day holds back check-in and costs a night at check-out.
+  const [lateness, setLateness] = useState<{ today: string | null; lagDays: number }>({ today: null, lagDays: 0 });
   const [names, setNames] = useState<{ types: Map<string, UnitType>; units: Map<string, Unit> }>({
     types: new Map(),
     units: new Map(),
@@ -43,15 +45,16 @@ export function ReservationDetail({ id }: { id: string }) {
   const [confirming, setConfirming] = useState(false);
 
   const load = useCallback(async () => {
-    const [res, types, units, day] = await Promise.all([
+    const [res, types, units, view] = await Promise.all([
       api<Reservation>(`/reservations/${id}`),
       api<UnitType[]>('/unit-types'),
       api<Unit[]>('/units'),
       // Without the open day check-in is simply not offered; the page still works.
-      api<{ day: string }>('/business-day').then((b) => b.day, () => null),
+      api<{ day: string; today?: string; lagDays?: number }>('/business-day').catch(() => null),
     ]);
     setR(res);
-    setBusinessDate(day);
+    setBusinessDate(view?.day ?? null);
+    setLateness({ today: view?.today ?? null, lagDays: view?.lagDays ?? 0 });
     setNames({ types: new Map(types.map((t) => [t.id, t])), units: new Map(units.map((u) => [u.id, u])) });
   }, [id]);
 
@@ -175,6 +178,8 @@ export function ReservationDetail({ id }: { id: string }) {
                     stay={s}
                     reservation={r}
                     businessDate={businessDate}
+                    today={lateness.today}
+                    lagDays={lateness.lagDays}
                     licence={licence}
                     onChanged={changed}
                   />
