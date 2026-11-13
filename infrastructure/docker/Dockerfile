@@ -30,9 +30,10 @@ RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
     --mount=type=cache,id=hotel-pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile
 RUN HOTEL_API_URL="$HOTEL_API_URL" pnpm build
-# Same exclusions as the old host-side tree (.dockerignore never applied to
-# files created after COPY), then the checks deploy.sh used to run on the host.
-RUN find . -name .turbo -prune -exec rm -rf {} + \
+# The old image copied a host-side tree through .dockerignore, which dropped every
+# .turbo, coverage and .next/cache directory (also inside node_modules); this
+# step repeats that, then runs the checks deploy.sh used to run on the host.
+RUN find . \( -name .turbo -o -name coverage \) -type d -prune -exec rm -rf {} + \
     && rm -rf apps/*/.next/cache \
     && test -f apps/hotel-api/dist/main.js \
     && test -f apps/hotel-api/dist/db/migrations/0001_foundation.sql \
