@@ -110,6 +110,19 @@ export const MESSAGES: Record<string, string> = {
   document_empty: 'Folio nema nijednu stavku ni plaćanje, pa dokument ne može da se izda.',
   document_not_found: 'Dokument ne postoji. Osvežite stranicu.',
 
+  // folio: charges, payments, refunds, corrections
+  line_not_found: 'Stavka folija ne postoji. Osvežite stranicu.',
+  payment_not_found: 'Plaćanje ne postoji. Osvežite stranicu.',
+  folio_closed: 'Folio je zatvoren i ne prima nove stavke ni plaćanja.',
+  idempotency_key_reused:
+    'Ovaj zahtev je već zabeležen, ali sa drugačijim podacima. Zatvorite prozor i proverite folio pre nego što pokušate ponovo.',
+  stay_not_chargeable: 'Na boravak u ovom stanju ne mogu se dodavati zaduženja.',
+  cannot_reverse_correction: 'Storno stavka se ne može stornirati.',
+  line_already_reversed: 'Stavka je već stornirana.',
+  refund_exceeds_credit: 'Povraćaj ne može biti veći od preplate na foliju ({creditMinor}).',
+  cannot_void_reversal: 'Storno plaćanja se ne može stornirati.',
+  payment_already_voided: 'Plaćanje je već stornirano.',
+
   // check-in and check-out
   check_in_wrong_day: 'Dolazak je {arrival}, a poslovni dan je {businessDate}. Zatvorite poslovni dan pre prijave gosta.',
   // The same code when the arrival is already behind the business day (see messageFor).
@@ -189,6 +202,13 @@ const FIELD_LABELS: Record<string, string> = {
   guestId: 'Gost',
   firstName: 'Ime',
   lastName: 'Prezime',
+  // folio: charges, payments, refunds and corrections
+  description: 'Opis',
+  amountMinor: 'Iznos',
+  vatRateBp: 'PDV stopa',
+  method: 'Način plaćanja',
+  reference: 'Referenca',
+  key: 'Ključ zahteva',
   'guest.firstName': 'Ime',
   'guest.lastName': 'Prezime',
   'guest.email': 'E-adresa',
@@ -210,7 +230,7 @@ function fill(template: string, details: Record<string, unknown> | null): string
     }
     if (key === 'field') return fieldLabel(String(v));
     if ((key === 'day' || key === 'arrival' || key === 'businessDate') && typeof v === 'string') return formatDate(v);
-    if (key === 'balanceMinor' && typeof v === 'number') return formatRsd(v);
+    if ((key === 'balanceMinor' || key === 'creditMinor') && typeof v === 'number') return formatRsd(v);
     return String(v);
   });
   return missing ? null : out;

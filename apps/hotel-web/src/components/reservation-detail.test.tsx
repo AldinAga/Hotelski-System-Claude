@@ -290,6 +290,15 @@ describe('ReservationDetail: check-in, check-out, guests and mail', () => {
   });
 });
 
+describe('ReservationDetail: folio link', () => {
+  it('links every stay to its folio, where charges are added and payments taken', async () => {
+    mockFetch(routes('VALID'));
+    render(<ReservationDetail id={RES} />);
+    const stay = await screen.findByRole('listitem', { name: 'Boravak 28.10.2026 – 3.11.2026' });
+    expect(within(stay).getByRole('link', { name: 'Folio' })).toHaveAttribute('href', '/folio/s1');
+  });
+});
+
 describe('ReservationDetail: licence modes on the stay actions', () => {
   const live = (status: string) => ({
     [`GET /api/reservations/${RES}`]: { body: { ...RESERVATION, stays: [{ ...RESERVATION.stays[0], status }] } },

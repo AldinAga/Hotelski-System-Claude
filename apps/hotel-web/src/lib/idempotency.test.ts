@@ -1,5 +1,5 @@
 import { renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { newKey, useIdempotencyKey } from './idempotency';
 
 /** The API accepts 8-100 of A-Z, a-z, 0-9, _ and - (hotel-api common/idempotency.ts). */
@@ -37,5 +37,22 @@ describe('useIdempotencyKey', () => {
     const a = renderHook(() => useIdempotencyKey());
     const b = renderHook(() => useIdempotencyKey());
     expect(a.result.current.key()).not.toBe(b.result.current.key());
+  });
+});
+
+describe('newKey on a page without randomUUID (plain HTTP, e.g. the staging reception)', () => {
+  it('falls back to getRandomValues: a v4 UUID the API accepts, different every time', () => {
+    vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) });
+    try {
+      expect((globalThis.crypto as { randomUUID?: unknown }).randomUUID).toBeUndefined();
+      const keys = Array.from({ length: 50 }, () => newKey());
+      expect(new Set(keys).size).toBe(50);
+      for (const key of keys) {
+        expect(key).toMatch(API_KEY);
+        expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

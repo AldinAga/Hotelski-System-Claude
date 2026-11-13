@@ -108,6 +108,128 @@ export interface CheckOutPreview {
   balanceMinor: number;
 }
 
+/** GET /stays/:id/folio and the lines and payments in it (folio.service.ts). Totals come from the server. */
+export type FolioStatus = 'none' | 'open' | 'closed';
+
+export interface FolioLine {
+  id: string;
+  kind: 'accommodation' | 'service' | 'fee' | 'correction' | string;
+  description: string;
+  amountMinor: number;
+  vatRateBp: number | null;
+  businessDate: string;
+  night: string | null;
+  sourceType: string;
+  reversesLineId: string | null;
+  /** The correction that reverses this line. */
+  reversedBy: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface FolioPayment {
+  id: string;
+  method: PaymentMethod | string;
+  amountMinor: number;
+  businessDate: string;
+  reference: string | null;
+  reversesPaymentId: string | null;
+  /** The payment that voids this one. */
+  voidedBy: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface Folio {
+  /** null while the stay has no folio (nothing was charged or paid yet). */
+  id: string | null;
+  stayId: string;
+  reservationId: string;
+  status: FolioStatus;
+  lines: FolioLine[];
+  payments: FolioPayment[];
+  chargesMinor: number;
+  paymentsMinor: number;
+  /** Charges minus payments; negative is a credit the guest has. */
+  balanceMinor: number;
+  /** Agreed nights not yet posted, for the pro forma and the check-out preview. */
+  unpostedNights: Array<{ night: string; priceMinor: number }>;
+  /** The VAT rates (basis points) a manual charge may carry. */
+  vatRatesBp: number[];
+  /** Set while fiscalisation is required but not switched on. */
+  fiscalNotice: 'not_available_yet' | null;
+}
+
+export type PaymentMethod = 'cash' | 'card' | 'transfer';
+
+export const PAYMENT_METHODS: Array<{ value: PaymentMethod; label: string }> = [
+  { value: 'cash', label: 'Gotovina' },
+  { value: 'card', label: 'Kartica' },
+  { value: 'transfer', label: 'Prenos' },
+];
+
+export function paymentMethodLabel(method: string): string {
+  return PAYMENT_METHODS.find((m) => m.value === method)?.label ?? method;
+}
+
+export type DocumentKind = 'receipt' | 'proforma';
+
+/** The snapshot a document was issued with (documents.service.ts). Seller fields can be null. */
+export interface FolioDocumentContent {
+  kind: DocumentKind;
+  number: string;
+  issuedAt: string;
+  businessDate: string;
+  notice: string;
+  seller: {
+    legalName: string | null;
+    taxId: string | null;
+    /** A natural person's JMBG arrives masked. */
+    registryId: string | null;
+    address: string | null;
+    postalCode: string | null;
+    city: string | null;
+    bankAccount: string | null;
+    vatPayer: boolean;
+  };
+  guest: { name: string; email: string | null };
+  reservation: { number: string; arrival: string; departure: string; unit: string | null };
+  lines: Array<{
+    description: string;
+    night: string | null;
+    amountMinor: number;
+    vatRateBp: number | null;
+    /** A night the pro forma expects but that is not posted yet. */
+    expected: boolean;
+  }>;
+  payments: Array<{ method: string; amountMinor: number; businessDate: string }>;
+  totalMinor: number;
+  paidMinor: number;
+  dueMinor: number;
+  /** VAT contained in the prices, per rate; null when the seller is not a VAT payer or a line has no rate. */
+  vat: Array<{ rateBp: number; baseMinor: number; vatMinor: number }> | null;
+}
+
+export interface FolioDocument {
+  id: string;
+  kind: DocumentKind;
+  number: string;
+  issuedAt: string;
+  content: FolioDocumentContent;
+}
+
+export interface FolioDocumentItem {
+  id: string;
+  kind: DocumentKind;
+  number: string;
+  issuedAt: string;
+}
+
+export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
+  receipt: 'Nefiskalni račun',
+  proforma: 'Predračun',
+};
+
 export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
 
 /** GET /reservations/:id/messages (mail module). */

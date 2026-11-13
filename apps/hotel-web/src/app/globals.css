@@ -1061,3 +1061,620 @@ html:has(.portal) body {
     width: 100%;
   }
 }
+
+/* ------------------------------------------------------------------------
+ * Folio, payments and documents (/folio/[stayId], /dokumenti/[id]).
+ *
+ * Uses the app tokens only. The signed-in app has no dark theme (see the
+ * back-to-top note above): :root pins color-scheme: light, so these pages
+ * stay light, and legible, on a dark OS.
+ * ---------------------------------------------------------------------- */
+:root {
+  --ok: #17573a;
+  --focus-ring: 0 0 0 3px rgba(31, 95, 191, 0.35);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.folio-page button:focus-visible,
+.folio-page a:focus-visible,
+.folio-page h1:focus-visible,
+.doc-page button:focus-visible,
+.doc-page a:focus-visible,
+.doc-page input:focus-visible,
+.doc-page h1:focus-visible,
+.modal button:focus-visible,
+.modal input:focus-visible,
+.modal select:focus-visible,
+.modal textarea:focus-visible,
+.modal h2:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.folio-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.folio-title-row h1 {
+  margin: 8px 0;
+}
+
+.folio-status.is-open {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.folio-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+.folio-meta strong {
+  color: var(--text);
+}
+
+.fiscal-notice {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.folio-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.folio-total {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(28, 36, 48, 0.06);
+}
+
+.folio-total dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.folio-total dd {
+  margin: 2px 0 0;
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.folio-total .folio-total-note {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ok);
+}
+
+.folio-total.is-credit {
+  border-color: var(--ok);
+}
+
+.folio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.folio-actions-block {
+  margin-bottom: 8px;
+}
+
+.folio-actions-block p {
+  margin: 0;
+}
+
+.folio-page h2 {
+  margin-top: 28px;
+}
+
+.folio-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.folio-table th {
+  padding: 8px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.folio-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.folio-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.folio-table th.num,
+.folio-table td.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.folio-table td.actions,
+.folio-table th.actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.folio-table .cell {
+  display: grid;
+  gap: 2px;
+}
+
+.folio-table .trail {
+  font-size: 0.85rem;
+}
+
+/* A reversed line or payment stays on the folio, struck through; its reversal links back to it. */
+.folio-table tr.is-reversed .desc,
+.folio-table tr.is-reversed td.num {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.folio-table tr:target td {
+  background: var(--selected);
+}
+
+button.small {
+  min-height: 36px;
+  padding: 4px 10px;
+  font-size: 0.85rem;
+}
+
+/* A phone: the table becomes a list of cards, label on the left, value on the right. */
+@media (max-width: 599px) {
+  .folio-table,
+  .folio-table tbody,
+  .folio-table tr,
+  .folio-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .folio-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .folio-table tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .folio-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .folio-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .folio-table td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 0.8rem;
+    padding-top: 2px;
+  }
+
+  .folio-table td.actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-top: 8px;
+  }
+
+  .folio-table td.actions::before {
+    content: none;
+  }
+
+  .folio-table td.actions:empty {
+    display: none;
+  }
+
+  .folio-table .cell {
+    text-align: right;
+  }
+
+  button.small {
+    min-height: 44px;
+  }
+
+  .folio-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Dialogs: a card in the middle of the screen, a sheet at the bottom of a phone. */
+body.modal-open {
+  overflow: hidden;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+  background: rgba(20, 27, 38, 0.5);
+  animation: modal-fade 160ms ease-out both;
+}
+
+.modal {
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px -20px rgba(20, 27, 38, 0.55);
+  animation: modal-in 220ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.modal h2.modal-title {
+  margin: 0 0 12px;
+  font-size: 1.2rem;
+}
+
+.modal .field {
+  display: grid;
+  gap: 4px;
+}
+
+.modal .field .help {
+  margin: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@keyframes modal-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@media (max-width: 480px) {
+  .modal-backdrop {
+    place-items: end center;
+    padding: 0;
+  }
+
+  .modal {
+    max-width: none;
+    max-height: 92dvh;
+    border-radius: 14px 14px 0 0;
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
+  }
+
+  .dialog-actions {
+    flex-direction: column;
+  }
+
+  .dialog-actions > button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .modal {
+    animation: none;
+  }
+}
+
+/* The document page: a toolbar and the document itself. */
+.doc-page {
+  max-width: 860px;
+}
+
+.doc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.doc-format {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.doc-format legend {
+  float: left;
+  margin-right: 12px;
+  padding: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.doc-format-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+
+.doc-format-option input {
+  width: auto;
+  min-height: 0;
+}
+
+.doc {
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #111111;
+  box-shadow: 0 10px 34px -20px rgba(28, 36, 48, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+.doc p {
+  margin: 0 0 4px;
+}
+
+.doc h1 {
+  margin: 0 0 12px;
+  font-size: 1.5rem;
+}
+
+.doc-notice {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 2px solid #111111;
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.doc-dates {
+  color: #444444;
+  font-size: 0.9rem;
+}
+
+.doc-block {
+  margin: 16px 0;
+}
+
+.doc-seller-name {
+  font-weight: 700;
+}
+
+.doc-label {
+  display: inline-block;
+  min-width: 6.5em;
+  color: #555555;
+}
+
+.doc-expected-note {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 4px solid #111111;
+  background: #f1f1f1;
+  font-size: 0.9rem;
+}
+
+.doc-tag {
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.doc-table {
+  width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+}
+
+.doc-table th {
+  padding: 6px 0;
+  border-bottom: 2px solid #111111;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.doc-table td {
+  padding: 6px 0;
+  border-bottom: 1px solid #cccccc;
+  vertical-align: top;
+}
+
+.doc-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.doc-caption {
+  padding: 8px 0 2px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.doc-totals {
+  display: grid;
+  gap: 4px;
+  margin: 16px 0;
+  margin-left: auto;
+  max-width: 320px;
+}
+
+.doc-totals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.doc-totals dt,
+.doc-totals dd {
+  margin: 0;
+}
+
+.doc-totals .doc-due {
+  padding-top: 6px;
+  border-top: 2px solid #111111;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+/* 80 mm roll: on screen a narrow strip, on paper the whole width of the roll. */
+.doc--thermal {
+  max-width: 302px;
+  margin: 0 auto;
+  padding: 14px;
+  font-size: 0.85rem;
+}
+
+.doc--thermal h1 {
+  font-size: 1.1rem;
+}
+
+.doc--thermal .doc-notice {
+  font-size: 0.9rem;
+}
+
+.doc--thermal .doc-label {
+  display: block;
+  min-width: 0;
+}
+
+.doc--thermal .doc-totals {
+  max-width: none;
+}
+
+@page {
+  size: A4;
+  margin: 14mm;
+}
+
+@page roll {
+  size: 80mm auto;
+  margin: 3mm;
+}
+
+.doc--thermal {
+  page: roll;
+}
+
+@media print {
+  /* Only the document is printed: no menu, banner, buttons, dialogs or back-to-top. */
+  .topnav,
+  .banner,
+  .back-to-top,
+  .no-print,
+  .modal-backdrop,
+  .folio-actions-block {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  main,
+  main.doc-page {
+    max-width: none;
+    padding: 0;
+  }
+
+  .doc {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .doc--thermal {
+    max-width: none;
+    margin: 0;
+    font-size: 9pt;
+  }
+
+  .doc-notice,
+  .doc-expected-note {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .doc-table tr,
+  .doc-totals,
+  .doc-block {
+    break-inside: avoid;
+  }
+}
