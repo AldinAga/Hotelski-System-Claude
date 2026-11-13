@@ -126,6 +126,27 @@ isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_te
 - **Manifest proizvoda:** `product/manifest.json`; objava `CENTRAL_ADMIN_URL=http://192.168.1.199:4100
   HOTEL_PUBLISHER_TOKEN=… node scripts/publish-manifest.mjs` (servisni token `product_publisher`,
   samo uz odobrenje korisnika; svaka izmena manifesta traži veću `version`).
+- **E-mail (SMTP), faza 1b:** potvrde i otkazi rezervacija idu kroz izlazno sanduče. Vlasnik sam dopisuje
+  `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` i `MAIL_FROM` u
+  `/volume1/ci/hotel/hotel.env` (imena su u `.env.example`; vrednosti se ne ispisuju i ne idu u repo), pa
+  `bash infrastructure/nas/deploy.sh` ponovo podiže `api`. Bez `SMTP_HOST` ili `MAIL_FROM` poruke se čuvaju,
+  ali se ne šalju, a ekran rezervacije piše „Nije poslato: SMTP nije podešen." Kad se ključevi dopišu, na
+  poruci se koristi „Pošalji ponovo".
+- **Pozadinski poslovi:** `hotel-api` sam pokreće dispečer izlaznog sandučeta (`OutboxDispatcher`) i
+  automatsko zatvaranje dana (`NightAuditScheduler`), samo iz `main.ts` posle migracija i provere licence.
+  Poseban kontejner ili cron ne postoji i ne sme da se dodaje. Zatvaranje se uključuje vremenom
+  `auto_close_time` u podešavanjima objekta (prazno: nema automatskog zatvaranja). Licenca koja bi odbila
+  ručno zatvaranje isključuje i automatsko.
+- **Poslovni dan posle deploy-a 1b:** migracija `0009` otvara poslovni dan na dan migracije (današnji datum objekta). Prvo
+  zatvaranje dana (tog dana migracije) prevodi u no-show svaki boravak u statusu `expected` sa dolaskom do tog
+  dana uključujući, i to samo kad je njegova rezervacija potvrđena; zato i gost koji je trebalo da stigne baš
+  na dan migracije, a nije prijavljen, postaje no-show. Navodi ih u izveštaju i skida ih sa kalendara. Zatvaranje je trajno, pa ga na stagingu (prave podatke Demo Hotela) pokreće samo
+  korisnik; sesija implementera ga ne zatvara.
+- **`smoke-1b` (stiže sa Taskom 14, još ne postoji):** `HOTEL_SMOKE_PASSWORD=… node scripts/smoke-1b.mjs
+  --api http://192.168.1.199:4200 --email <vlasnik> (--totp <6 cifara> | --totp-file ~/owner-totp.txt)
+  [--allow-close] [--mail-to <adresa>]`. Radi samo dok je Turnstile isključen. Bez `--allow-close` staje
+  kad poslovni dan kasni. Ostavlja prave podatke (gost „Smoke Test 1b", zatvoreni dani, nefiskalni računi
+  `N-…`), pa ga pokreće korisnik, ne implementer.
 - Kod za ručno pokretanje baza: `git archive HEAD | ssh … "tar -x -C /volume1/ci/hotel/src"` (pre toga `rm -rf` samo
   `/volume1/ci/hotel/src`).
 - Lozinke: `/volume1/ci/hotel/hotel.env` (`600`, nasumične, napravljene 2026-10-26). Pravi se samo jednom

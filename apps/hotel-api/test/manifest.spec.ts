@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Controller, Get, type INestApplication } from '@nestjs/common';
-import { DiscoveryService, MetadataScanner } from '@nestjs/core';
-import { LICENSED_ACTION, LicensedAction, type LicensedActionMeta } from '../src/licensing/licensed-action';
+import { Controller, Get } from '@nestjs/common';
+import { LicensedAction, type LicensedActionMeta } from '../src/licensing/licensed-action';
 import { SAFE_MODE_ALLOWED } from '../src/licensing/safe-mode';
 import { createTestApp, type TestApp } from './app';
+import { ACTIONS_1B, licensedActions } from './routes';
 
 // The product manifest is the contract with the Central Admin Panel (spec
 // section 4). The oracle for its keys is the spec itself: the tables of
@@ -94,25 +94,6 @@ function cyclesOf(modules: ManifestModule[]): string[][] {
   };
   for (const m of modules) if (!state.has(m.key)) visit(m.key);
   return cycles;
-}
-
-/** Every @LicensedAction (method or controller level) of the running app. */
-function licensedActions(app: INestApplication): Array<LicensedActionMeta & { where: string }> {
-  const discovery = app.get(DiscoveryService);
-  const scanner = new MetadataScanner();
-  const found: Array<LicensedActionMeta & { where: string }> = [];
-  for (const wrapper of discovery.getControllers()) {
-    const controller = wrapper.metatype as (new () => object) | undefined;
-    if (!controller) continue;
-    const onClass = Reflect.getMetadata(LICENSED_ACTION, controller) as LicensedActionMeta | undefined;
-    if (onClass) found.push({ ...onClass, where: controller.name });
-    const proto = controller.prototype as Record<string, unknown>;
-    for (const name of scanner.getAllMethodNames(proto)) {
-      const meta = Reflect.getMetadata(LICENSED_ACTION, proto[name] as object) as LicensedActionMeta | undefined;
-      if (meta) found.push({ ...meta, where: `${controller.name}.${name}` });
-    }
-  }
-  return found;
 }
 
 /** Licensed actions whose module is not in the manifest. */
@@ -240,6 +221,15 @@ describe('product manifest', () => {
       expect(unknownModules(actions)).toEqual([]);
       // Phase 1a has 20 licensed actions (19 routes plus the UsersController class); the scan must actually see them.
       expect(actions.length).toBeGreaterThanOrEqual(20);
+    });
+
+    // Phase 1b adds actions but no manifest module: they sit on hotel.core and
+    // hotel.folio, both core, so no licence has to be reissued for them.
+    it('the actions added in 1b sit on hotel.core and hotel.folio and nowhere else', () => {
+      const added = licensedActions(ta.app).filter((a) => ACTIONS_1B.test(a.action));
+      // 1b has 28 routes; every one carries an annotation on its own handler.
+      expect(added.length).toBeGreaterThanOrEqual(28);
+      expect([...new Set(added.map((a) => a.module))].sort()).toEqual(['hotel.core', 'hotel.folio']);
     });
 
     it('the scan reports a route on a module outside the manifest', () => {
