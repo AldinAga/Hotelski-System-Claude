@@ -10,6 +10,7 @@ import { DB, type Db } from '../db/tokens';
 import { ActivationService, ParentRefusedError } from '../licensing/activation.service';
 import { LicenceService } from '../licensing/licence.service';
 import { LicenceStore } from '../licensing/licence.store';
+import { defaultFiscalComplianceMode } from '../legal/legal-profile.service';
 import { hashPassword } from './password';
 import { newTotpSecret, totpUri, totpVerify } from './totp';
 
@@ -153,11 +154,11 @@ export class SetupService {
         ? (await tx.update(property).set({ name: propertyName }).returning({ id: property.id }))[0].id
         : (await tx.insert(property).values({ name: propertyName }).returning({ id: property.id }))[0].id;
       // Fiscalisation is required of companies and entrepreneurs, not of a natural person (0011).
-      const fiscalMode = legalKind === 'natural_person' ? ('disabled' as const) : ('required' as const);
+      const fiscalComplianceMode = defaultFiscalComplianceMode(legalKind);
       await tx
         .insert(legalProfile)
-        .values({ propertyId, kind: legalKind, fiscalMode })
-        .onConflictDoUpdate({ target: legalProfile.propertyId, set: { kind: legalKind, fiscalMode } });
+        .values({ propertyId, kind: legalKind, fiscalComplianceMode })
+        .onConflictDoUpdate({ target: legalProfile.propertyId, set: { kind: legalKind, fiscalComplianceMode } });
 
       const fields = { email, name, passwordHash, totpSecret: secret, totpState: 'setup' as const, totpLastStep: null };
       const previous = await this.setupOwner(tx);
