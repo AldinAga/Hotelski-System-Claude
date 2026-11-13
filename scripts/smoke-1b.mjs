@@ -487,10 +487,12 @@ await step('check-out', async () => {
 
 // After the check-out (preflight F11): the folio is closed and its balance is 0 in both paths.
 await step('receipt', async () => {
-  const doc = expectStatus(
+  const issued = expectStatus(
     await call('POST', `/stays/${stay.stayId}/folio/documents`, { kind: 'receipt', key: key(stay.stayId, 'receipt') }),
     [200, 201],
   );
+  // The checks read the document as it is stored, not the answer of the POST.
+  const doc = expectStatus(await call('GET', `/folio-documents/${issued.id}`), 200);
   check(doc?.content?.notice === NOT_FISCAL, `dokument nema oznaku "${NOT_FISCAL}"`);
   check(doc.content.dueMinor === 0, `dueMinor je ${doc.content.dueMinor} (očekivano 0)`);
   check(/^N-\d{4}-\d{6}$/.test(doc.number), `broj dokumenta ${doc.number} nije oblika N-GGGG-NNNNNN`);
