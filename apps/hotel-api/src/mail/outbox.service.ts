@@ -165,7 +165,7 @@ export class OutboxService {
   async closeConfirmations(tx: Tx, propertyId: string, reservationId: string): Promise<void> {
     await tx.execute(sql`
       UPDATE outbox_message
-         SET status = 'skipped', lease_until = NULL, last_error = ${RESERVATION_CANCELLED_REASON}
+         SET status = 'skipped', last_error = ${RESERVATION_CANCELLED_REASON}
        WHERE property_id = ${propertyId} AND reservation_id = ${reservationId}
          AND template = 'reservation_confirmed' AND status IN ('pending', 'failed')`);
   }
