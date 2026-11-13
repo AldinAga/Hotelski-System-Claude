@@ -33,17 +33,20 @@ describe('ReservationMessages', () => {
           message({ id: 'm2', template: 'reservation_cancelled', status: 'pending' }),
           message({ id: 'm3', status: 'failed', attempts: 6, lastError: 'Server ne odgovara.' }),
           message({ id: 'm4', status: 'skipped', recipient: null, lastError: 'Gost nema e-adresu.' }),
+          message({ id: 'm5', status: 'skipped', lastError: 'Rezervacija je otkazana, pa potvrda nije poslata.' }),
         ],
       },
     });
     render(<ReservationMessages reservationId="r1" />);
     const items = await screen.findAllByRole('listitem');
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
     expect(within(items[0]).getByText('Poslato')).toBeInTheDocument();
     expect(within(items[1]).getByText('Čeka slanje')).toBeInTheDocument();
     expect(items[1]).toHaveTextContent('Otkazivanje rezervacije');
     expect(within(items[2]).getByText('Nije poslato: Server ne odgovara.')).toBeInTheDocument();
     expect(within(items[3]).getByText('Gost nema e-adresu')).toBeInTheDocument();
+    // A confirmation closed by the cancellation keeps its address and says why it was not sent; no resend.
+    expect(within(items[4]).getByText('Rezervacija je otkazana, pa potvrda nije poslata.')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Pošalji ponovo' })).toHaveLength(1);
     expect(within(items[2]).getByRole('button', { name: 'Pošalji ponovo' })).toBeEnabled();
   });
@@ -119,6 +122,17 @@ describe('ReservationMessages', () => {
     await user.click(await screen.findByRole('button', { name: 'Pošalji ponovo' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Poruka je već poslata.');
     expect(await screen.findByText('Poslato')).toBeInTheDocument();
+  });
+
+  it('a resend of a confirmation of a cancelled reservation shows message_reservation_cancelled', async () => {
+    mockFetch({
+      [LIST]: { body: [message({ status: 'failed', lastError: 'x' })] },
+      'POST /api/messages/m1/resend': () => apiError(409, 'message_reservation_cancelled'),
+    });
+    const user = userEvent.setup();
+    render(<ReservationMessages reservationId="r1" />);
+    await user.click(await screen.findByRole('button', { name: 'Pošalji ponovo' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Rezervacija je otkazana, pa potvrda ne može da se pošalje.');
   });
 
   it('in safe mode Pošalji ponovo is disabled', async () => {

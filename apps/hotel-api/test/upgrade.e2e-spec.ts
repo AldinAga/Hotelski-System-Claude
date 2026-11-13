@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Pool } from 'pg';
@@ -157,6 +158,53 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
       await client.query(`UPDATE legal_profile SET kind = 'entrepreneur'`);
       await client.query(backfill[0]);
       expect((await client.query(`SELECT fiscal_compliance_mode FROM legal_profile`)).rows).toEqual([{ fiscal_compliance_mode: 'required' }]);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('0013: an empty outbox (no belated mails for 1a reservations); keys, checks and composite keys hold', async () => {
+    for (const table of ['outbox_message', 'outbox_attempt']) {
+      const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`);
+      expect({ table, n: rows[0].n }).toEqual({ table, n: 0 });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const insert = (key: string, over: { template?: string; status?: string; channel?: string; reservationId?: string | null } = {}) =>
+        client.query<{ id: string }>(
+          `INSERT INTO outbox_message (property_id, channel, template, idempotency_key, reservation_id, recipient, payload, status, next_attempt_at)
+           VALUES ($1, $2, $3, $4, $5, 'gost@example.com', '{}', $6, '2026-11-02T08:00:00Z') RETURNING id`,
+          [seed.propertyId, over.channel ?? 'email', over.template ?? 'reservation_confirmed', key, over.reservationId === undefined ? seed.futureReservationId : over.reservationId, over.status ?? 'pending'],
+        );
+      const first = await insert('upgrade-key-1');
+      await client.query('SAVEPOINT s');
+      await expect(insert('upgrade-key-1')).rejects.toMatchObject({ constraint: 'outbox_message_property_id_idempotency_key_key' });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(insert('upgrade-key-2', { template: 'newsletter' })).rejects.toMatchObject({ constraint: 'outbox_message_template_check' });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(insert('upgrade-key-3', { status: 'lost' })).rejects.toMatchObject({ constraint: 'outbox_message_status_check' });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(insert('upgrade-key-4', { channel: 'sms' })).rejects.toMatchObject({ constraint: 'outbox_message_channel_check' });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      await expect(insert('upgrade-key-5', { reservationId: randomUUID() })).rejects.toMatchObject({
+        constraint: 'outbox_message_property_id_reservation_id_fkey',
+      });
+      await client.query('ROLLBACK TO SAVEPOINT s');
+      // A message without a reservation is allowed (the column is nullable).
+      await insert('upgrade-key-6', { reservationId: null });
+      // An attempt belongs to a message of its own property: a composite key (preflight F19). A second
+      // property cannot exist (property_singleton), so the key is read from the catalog instead.
+      const { rows: defs } = await client.query<{ def: string }>(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'outbox_attempt'::regclass AND contype = 'f' ORDER BY 1`,
+      );
+      expect(defs.map((d) => d.def)).toContain('FOREIGN KEY (property_id, message_id) REFERENCES outbox_message(property_id, id)');
+      const ok = await client.query(`INSERT INTO outbox_attempt (property_id, message_id, at, ok) VALUES ($1, $2, '2026-11-02T08:00:00Z', true) RETURNING id`, [
+        seed.propertyId,
+        first.rows[0].id,
+      ]);
+      expect(ok.rowCount).toBe(1);
     } finally {
       await client.query('ROLLBACK');
       client.release();

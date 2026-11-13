@@ -145,6 +145,7 @@ export const MESSAGES: Record<string, string> = {
   message_not_found: 'Poruka ne postoji. Osvežite stranicu.',
   message_already_sent: 'Poruka je već poslata.',
   message_has_no_recipient: 'Gost nema e-adresu, pa poruka ne može da se pošalje.',
+  message_reservation_cancelled: 'Rezervacija je otkazana, pa potvrda ne može da se pošalje.',
 };
 
 /** Field names in validation_failed details, as the forms label them. */

@@ -11,7 +11,11 @@ import { TURNSTILE_CONFIG, type TurnstileConfig } from '../src/auth/turnstile';
 import { PG_POOL } from '../src/db/tokens';
 import { LicenceService } from '../src/licensing/licence.service';
 import { LICENSING_CONFIG, type LicensingConfig } from '../src/licensing/licensing.config';
+import { MAIL_FROM, MAIL_TRANSPORT, NoopMailTransport, type MailTransport } from '../src/mail/mail-transport';
 import { createTestDb, TestDb } from './db';
+
+/** The From header of test mail. */
+export const TEST_MAIL_FROM = 'Demo Hotel <hotel@example.test>';
 
 export interface TestAppOptions {
   /** Extra controllers (test-only routes). */
@@ -30,6 +34,8 @@ export interface TestAppOptions {
   turnstile?: TurnstileConfig | null;
   /** The test pool's client limit (default pg's 10); see createTestDb. */
   poolMax?: number;
+  /** Replaces the mail transport; default is the Noop transport (the environment's SMTP settings are never read in tests). */
+  mail?: MailTransport;
 }
 
 export interface TestApp {
@@ -53,6 +59,8 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
   })
     .overrideProvider(PG_POOL)
     .useValue(testDb.pool);
+  builder = builder.overrideProvider(MAIL_TRANSPORT).useValue(opts.mail ?? new NoopMailTransport());
+  builder = builder.overrideProvider(MAIL_FROM).useValue(TEST_MAIL_FROM);
   if (opts.licensing) builder = builder.overrideProvider(LICENSING_CONFIG).useValue(opts.licensing);
   if (opts.clock) builder = builder.overrideProvider(CLOCK).useValue(opts.clock);
   if (opts.turnstile !== undefined) builder = builder.overrideProvider(TURNSTILE_CONFIG).useValue(opts.turnstile);
