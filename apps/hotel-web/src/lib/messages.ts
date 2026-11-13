@@ -203,7 +203,6 @@ const FIELD_LABELS: Record<string, string> = {
   firstName: 'Ime',
   lastName: 'Prezime',
   // folio: charges, payments, refunds and corrections
-  kind: 'Vrsta',
   description: 'Opis',
   amountMinor: 'Iznos',
   vatRateBp: 'PDV stopa',
