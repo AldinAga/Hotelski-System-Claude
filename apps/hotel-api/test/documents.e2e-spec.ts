@@ -262,6 +262,52 @@ describe('folio documents (e2e)', () => {
     expect((await fd.get(`/stays/${fresh.stayId}/folio/documents`)).body).toEqual([]);
   });
 
+  it('the list is ordered by issue time, not by the order the rows were written', async () => {
+    const s = await inHouse(0, '2026-11-02', '2026-11-03');
+    await pay(s.stayId, 10_000, 'pay-order-001');
+    fd.setNow(new Date('2026-11-02T09:00:00Z'));
+    const later = (await issue(s.stayId, 'receipt', 'doc-order-001')).body;
+    // The clock moves back (a correction): this document is written second but issued earlier.
+    fd.setNow(new Date('2026-11-02T08:30:00Z'));
+    const earlier = (await issue(s.stayId, 'proforma', 'doc-order-002')).body;
+    const list = await fd.get(`/stays/${s.stayId}/folio/documents`);
+    expect(list.body.map((d: { id: string }) => d.id)).toEqual([earlier.id, later.id]);
+  });
+
+  it('a receipt can be issued for a folio that is closed by the check-out', async () => {
+    const s = await inHouse(0, '2026-11-02', '2026-11-03');
+    expect((await pay(s.stayId, 1_000_000, 'pay-closed-001')).status).toBe(201);
+    expect((await fd.post(`/stays/${s.stayId}/check-out`, { version: s.version })).status).toBe(200);
+    expect(await fd.sql(`SELECT status FROM folio`)).toEqual([{ status: 'closed' }]);
+    const res = await issue(s.stayId, 'receipt', 'doc-closed-001');
+    expect(res.status).toBe(201);
+    expect(res.body.content).toMatchObject({ totalMinor: 1_000_000, paidMinor: 1_000_000, dueMinor: 0 });
+    expect(await fd.sql(`SELECT status FROM folio`)).toEqual([{ status: 'closed' }]);
+  });
+
+  it('the guest of a stay without a stay_guest row is the holder of the reservation', async () => {
+    const s = await inHouse(0, '2026-11-02', '2026-11-03');
+    await fd.sql('DELETE FROM stay_guest WHERE stay_id = $1', [s.stayId]); // a stay as phase 1a left it
+    const res = await issue(s.stayId, 'proforma', 'doc-holder-001');
+    expect(res.status).toBe(201);
+    expect(res.body.content.guest).toEqual({ name: 'Petar Petrović', email: 'petar@example.com' });
+  });
+
+  it('the number carries the year of the business day, not of the clock', async () => {
+    await fd.travel(new Date('2026-12-31T10:00:00Z'));
+    const b = await fd.bookStay({ typeId, planId }, '2026-12-31', '2027-01-02');
+    // The payment opens the business day 2026-12-31.
+    expect((await pay(b.stayId, 10_000, 'pay-year-00001')).status).toBe(201);
+    // 06:00 on 2027-01-01 in Belgrade: the calendar and the clock are in the new year, the business day is not closed yet.
+    await fd.travel(new Date('2027-01-01T05:00:00Z'));
+    const res = await issue(b.stayId, 'receipt', 'doc-year-00001');
+    expect(res.status).toBe(201);
+    expect(res.body.number).toBe('N-2026-000001');
+    expect(res.body.content).toMatchObject({ businessDate: '2026-12-31', number: 'N-2026-000001' });
+    expect(res.body.issuedAt).toBe('2027-01-01T05:00:00.000Z');
+    expect(await counters()).toEqual([{ kind: 'receipt', year: 2026, last: 1 }]);
+  });
+
   it('unknown stay or document: 404', async () => {
     const unknown = '00000000-0000-4000-8000-000000000000';
     const seen = [];

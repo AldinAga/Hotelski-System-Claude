@@ -331,7 +331,7 @@ export class FolioService {
         const folio = folios[0];
         const { vatRatesBp } = await this.settings.read(tx, propertyId);
         const unpostedNights = CHARGEABLE.has(stay.status) ? await this.unpostedNights(tx, propertyId, stayId) : [];
-        const { fiscalNotice } = await this.legal.get();
+        const { fiscalNotice } = await this.legal.getIn(tx, propertyId);
         const base = { stayId, reservationId: stay.reservation_id, unpostedNights, vatRatesBp, fiscalNotice };
         if (!folio) {
           return { ...base, id: null, status: 'none', lines: [], payments: [], chargesMinor: 0, paymentsMinor: 0, balanceMinor: 0 };
