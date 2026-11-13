@@ -23,9 +23,15 @@ function urlFor(database: string): string {
 // HOTEL_TEST_DB_PREFIX (lowercase letters, digits, underscore; unset locally) is put in
 // front of every database name the specs create, so concurrent runs on one Postgres
 // (the GitHub workflow sets it from the run id) never share or drop each other's
-// databases.
+// databases. Turbo passes only the variables named in turbo.json to the test task; a
+// GitHub run without the prefix would share hotel_test_N with every other run, so it
+// stops here instead.
 export function testDbName(base: string): string {
-  return `${process.env.HOTEL_TEST_DB_PREFIX ?? ''}${base}`;
+  const prefix = process.env.HOTEL_TEST_DB_PREFIX ?? '';
+  if (process.env.GITHUB_ACTIONS === 'true' && prefix === '') {
+    throw new Error('HOTEL_TEST_DB_PREFIX did not reach the specs (check passThroughEnv in turbo.json)');
+  }
+  return `${prefix}${base}`;
 }
 
 function quoteIdent(name: string): string {

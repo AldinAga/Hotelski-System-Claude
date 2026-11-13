@@ -7,7 +7,7 @@
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "test": {
-      "passThroughEnv": ["DATABASE_URL"]
+      "passThroughEnv": ["DATABASE_URL", "HOTEL_TEST_DB_PREFIX", "GITHUB_ACTIONS"]
     },
     "typecheck": {}
   }
