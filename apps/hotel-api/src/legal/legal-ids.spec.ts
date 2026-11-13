@@ -31,6 +31,17 @@ describe('legal ids', () => {
     expect(isValidJmbg(withCheckDigit('290299050000'))).toBe(false); // 29 Feb 1990
   });
 
+  it('PIB: a step that comes out as 0 counts as 10 (ISO 7064 MOD 11,10)', () => {
+    // For 10000000 the rule gives check digit 8; reading a 0 step as 0 would give 1.
+    expect(isValidPib('100000008')).toBe(true);
+    expect(isValidPib('100000001')).toBe(false);
+  });
+
+  it('JMBG: 800 in the year part is 1800, which had no 29 February (2800 would have)', () => {
+    expect(isValidJmbg(withCheckDigit('290280071000'))).toBe(false);
+    expect(isValidJmbg(withCheckDigit('280280071000'))).toBe(true);
+  });
+
   it('MB is exactly eight digits', () => {
     expect(isValidMb('07036540')).toBe(true);
     expect(isValidMb('7036540')).toBe(false);
