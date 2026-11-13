@@ -189,7 +189,6 @@ const FIELD_LABELS: Record<string, string> = {
   guestId: 'Gost',
   firstName: 'Ime',
   lastName: 'Prezime',
-  phone: 'Telefon',
   'guest.firstName': 'Ime',
   'guest.lastName': 'Prezime',
   'guest.email': 'E-adresa',
