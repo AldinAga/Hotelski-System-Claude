@@ -20,6 +20,14 @@ function urlFor(database: string): string {
   return url.toString();
 }
 
+// HOTEL_TEST_DB_PREFIX (lowercase letters, digits, underscore; unset locally) is put in
+// front of every database name the specs create, so concurrent runs on one Postgres
+// (the GitHub workflow sets it from the run id) never share or drop each other's
+// databases.
+export function testDbName(base: string): string {
+  return `${process.env.HOTEL_TEST_DB_PREFIX ?? ''}${base}`;
+}
+
 function quoteIdent(name: string): string {
   if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`unsafe database name: ${name}`);
   return `"${name}"`;
@@ -44,15 +52,16 @@ export async function ensureDatabase(name: string, fresh = false): Promise<void>
 // A pool on a throw-away database; used by specs that need an empty database
 // of their own (the migrator spec).
 export async function createScratchPool(name: string): Promise<Pool> {
-  await ensureDatabase(name, true);
-  return new Pool({ connectionString: urlFor(name) });
+  const prefixed = testDbName(name);
+  await ensureDatabase(prefixed, true);
+  return new Pool({ connectionString: urlFor(prefixed) });
 }
 
 // One database per Jest worker, created and migrated once per worker process.
 // `poolMax` raises the pool's client limit (pg default 10) for a suite whose
 // race tests hold more transactions open at once (Ruling 27a).
 export async function createTestDb(opts: { poolMax?: number } = {}): Promise<TestDb> {
-  const name = `hotel_test_${process.env.JEST_WORKER_ID ?? '1'}`;
+  const name = testDbName(`hotel_test_${process.env.JEST_WORKER_ID ?? '1'}`);
   await ensureDatabase(name);
   const connectionString = urlFor(name);
   const pool = new Pool({ connectionString, ...(opts.poolMax ? { max: opts.poolMax } : {}) });

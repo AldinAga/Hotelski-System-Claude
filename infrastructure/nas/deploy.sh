@@ -1,34 +1,45 @@
 #!/usr/bin/env bash
 # Stages a commit of the hotel system on the NAS (project claude-hotel):
 #
-#   infrastructure/nas/deploy.sh          # deploy HEAD
-#   infrastructure/nas/deploy.sh <ref>    # deploy another ref
+#   infrastructure/nas/deploy.sh                # deploy HEAD
+#   infrastructure/nas/deploy.sh <ref>          # deploy another ref
+#   infrastructure/nas/deploy.sh --dry-run [ref]      # only the GitHub check; the NAS is not touched
+#   infrastructure/nas/deploy.sh --build-check [ref]  # check, then build hotel-claude:buildx-check
+#                                                      # from /volume1/ci/hotel/buildx-check and stop
+#                                                      # (no hotel.env, no :staging, no container)
 #
-#   <ref> is resolved once to a full commit SHA; that SHA is what ci.sh tests,
-#   what git archive ships and what the image is tagged with.
+#   <ref> is resolved once to a full commit SHA; that SHA is what the CI run is
+#   looked up by, what git archive ships and what the image is tagged with.
 #
-#   1. infrastructure/nas/ci.sh <sha>: build, tests and typecheck; red stops here.
+#   1. gh on this machine: the GitHub Actions run "CI" for exactly this SHA must have
+#      concluded success (it ran build, tests and typecheck on the NAS runner). No green
+#      run, no deploy. GH_REPO overrides the repository.
 #   2. `git archive <sha>` into /volume1/ci/hotel/deploy (never the working tree,
 #      never /volume1/ci/hotel/src, which belongs to ci.sh).
-#   3. install and build there, inside hotel-ci-runner-claude (registry token
-#      mounted read-only, never in the tree), hotel-web with
-#      HOTEL_API_URL=http://hotel-api-claude:4200 (Next fixes the rewrite at build).
-#   4. hotel.env: add HOTEL_SECRET_KEY, HOTEL_ROOT_KEYSET, DATABASE_URL if missing
+#   3. hotel.env: add HOTEL_SECRET_KEY, HOTEL_ROOT_KEYSET, DATABASE_URL if missing
 #      (hotel-env.sh of the deployed ref; add-only, values never printed).
-#   5. docker build -> hotel-claude:<sha> only.
-#   6. refuse if the compose file would recreate a database or Redis container;
+#   4. docker buildx build -> hotel-claude:<sha> only. Install and build happen in the
+#      Dockerfile build stage; the registry .npmrc is a BuildKit secret mount, so it is
+#      in no layer, ARG, ENV or log. hotel-web is built with
+#      HOTEL_API_URL=http://hotel-api-claude:4200 (Next fixes the rewrite at build).
+#   5. refuse if the compose file would recreate a database or Redis container;
 #      only then tag hotel-claude:staging.
-#   7. postgres, hub-postgres and redis: started only if missing or stopped,
+#   6. postgres, hub-postgres and redis: started only if missing or stopped,
 #      never recreated (--no-recreate); then api and web alone
 #      (--no-deps --remove-orphans --wait).
-#   8. keep the 3 newest hotel-claude:<sha> tags; nothing else is touched.
+#   7. keep the 3 newest hotel-claude:<sha> tags; nothing else is touched.
 #
-# Run from a machine holding ~/.ssh/synology_claude_ci. Nothing started here may
-# exit (Synology mails for every stopped container): one-off work runs via
-# `docker exec` in hotel-ci-runner-claude, and hotel-api migrates and then
-# listens in one long-running process. Volumes are never removed.
+# Run from a machine holding ~/.ssh/synology_claude_ci and an authenticated gh. Nothing
+# started here may exit (Synology mails for every stopped container): BuildKit steps
+# are not containers, and hotel-api migrates and then listens in one long-running
+# process. Volumes are never removed.
 set -euo pipefail
 
+MODE=deploy
+case "${1:-}" in
+  --dry-run) MODE=dry-run; shift ;;
+  --build-check) MODE=build-check; shift ;;
+esac
 REF="${1:-HEAD}"
 
 NAS="claude-ci@192.168.1.199"
@@ -37,40 +48,66 @@ ROOT=/volume1/ci/hotel
 DEPLOY=$ROOT/deploy
 DOCKER=/usr/local/bin/docker
 API_URL_FOR_WEB=http://hotel-api-claude:4200
+GH_REPO="${GH_REPO:-AldinAga/Hotelski-System-Claude}"
 
 cd "$(git rev-parse --show-toplevel)"
-# Resolved once: a branch that moves during the deploy cannot split tests,
+# Resolved once: a branch that moves during the deploy cannot split the CI run,
 # archive and image across two commits.
 SHA="$(git rev-parse --verify "$REF^{commit}")"
 SHORT="${SHA:0:7}"
 nas() { ssh -i "$KEY" -o BatchMode=yes -o LogLevel=ERROR "$NAS" "$@"; }
 
-echo "==> $SHORT: tests on the NAS (ci.sh)"
-bash infrastructure/nas/ci.sh "$SHA"
+echo "==> $SHORT: GitHub Actions run for this exact commit"
+# Tests no longer run here: the CI workflow (.github/workflows/ci.yml) ran them on
+# the NAS runner. A SHA that was never pushed, or whose run is red, is not deployed.
+GH_RUNS="$(gh run list -R "$GH_REPO" --workflow CI --commit "$SHA" --json conclusion,status,url --limit 20)"   || { echo "could not ask GitHub for the runs of $SHORT (gh installed and logged in?)" >&2; exit 1; }
+GREEN_URL="$(gh run list -R "$GH_REPO" --workflow CI --commit "$SHA" --json conclusion,status,url --limit 20   --jq '[.[] | select(.status == "completed" and .conclusion == "success")][0].url // empty')"
+if [ -z "$GREEN_URL" ]; then
+  echo "No green CI run for $SHA in $GH_REPO. Push the commit (branch master or phase-*)," >&2
+  echo "wait for the CI run to pass, then deploy again. Runs found: $GH_RUNS" >&2
+  exit 1
+fi
+echo "   green: $GREEN_URL"
+if [ "$MODE" = dry-run ]; then
+  echo "==> dry run: stopping before the NAS is touched (would: archive to $DEPLOY, hotel.env, buildx build hotel-claude:$SHA, guard, tag, up api web)"
+  exit 0
+fi
+
+# --build-check builds into a sibling directory under a throwaway tag, so a
+# running deploy's files and :staging stay untouched; it stops after the build.
+if [ "$MODE" = build-check ]; then
+  DEPLOY=$ROOT/buildx-check
+  TAG="hotel-claude:buildx-check"
+else
+  TAG="hotel-claude:$SHA"
+fi
 
 echo "==> $SHORT: copying git archive to $DEPLOY"
 nas "rm -rf $DEPLOY && mkdir -p $DEPLOY"
 git archive --format=tar "$SHA" | nas "tar -x -C $DEPLOY"
 
-# Same runner and pnpm setup as ci.sh; the runner mounts $ROOT at /ci/hotel.
-PNPM="export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 && mkdir -p /tmp/bin && corepack enable --install-directory /tmp/bin && export PATH=/tmp/bin:\$PATH"
-echo "==> installing and building for the image"
-nas "$DOCKER exec -w /ci/hotel/deploy -e HOTEL_API_URL=$API_URL_FOR_WEB \
-  hotel-ci-runner-claude sh -c '$PNPM && pnpm install --frozen-lockfile && pnpm build'"
-nas "test -f $DEPLOY/apps/hotel-api/dist/main.js && test -f $DEPLOY/apps/hotel-api/dist/db/migrations/0001_foundation.sql"
-# The web image is useless if its /api rewrite points anywhere else.
-nas "grep -q 'hotel-api-claude:4200' $DEPLOY/apps/hotel-web/.next/routes-manifest.json" \
-  || { echo "hotel-web was not built with HOTEL_API_URL=$API_URL_FOR_WEB" >&2; exit 1; }
+if [ "$MODE" = deploy ]; then
+  # The deployed ref's copy, so the script matches the image it prepares.
+  echo "==> hotel.env (add-only, key names only)"
+  nas "bash $DEPLOY/infrastructure/nas/hotel-env.sh"
+fi
 
-# The deployed ref's copy, so the script matches the image it prepares.
-echo "==> hotel.env (add-only, key names only)"
-nas "bash $DEPLOY/infrastructure/nas/hotel-env.sh"
-
-# Only the commit tag here: :staging moves after the guard below, so a refused
-# or failed deploy never leaves :staging on an image that was not started.
-echo "==> building image hotel-claude:$SHA"
+# Install and build run inside the Dockerfile's build stage (BuildKit, no
+# container objects, so no Synology stop mails). The registry token is the
+# secret mount; it is never an argument, a variable or a file in the context
+# (.dockerignore keeps .npmrc out). Only the commit tag here: :staging moves
+# after the guard below, so a refused or failed deploy never leaves :staging on
+# an image that was not started.
+echo "==> building image $TAG (buildx, BuildKit secret npmrc)"
 nas "cp $DEPLOY/infrastructure/docker/.dockerignore $DEPLOY/.dockerignore && \
-  $DOCKER build -q -f $DEPLOY/infrastructure/docker/Dockerfile -t hotel-claude:$SHA $DEPLOY"
+  $DOCKER buildx build --load --progress=plain --secret id=npmrc,src=/volume1/ci/.npmrc \
+  --build-arg HOTEL_API_URL=$API_URL_FOR_WEB \
+  -f $DEPLOY/infrastructure/docker/Dockerfile -t $TAG $DEPLOY"
+if [ "$MODE" = build-check ]; then
+  echo "==> build check done: $TAG built from $DEPLOY; nothing deployed, :staging untouched."
+  echo "    Remove with: $DOCKER rmi $TAG && rm -rf $DEPLOY"
+  exit 0
+fi
 
 COMPOSE="$DOCKER compose -f $DEPLOY/infrastructure/docker/docker-compose.yml --env-file $ROOT/hotel.env"
 
