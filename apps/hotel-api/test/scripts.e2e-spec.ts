@@ -380,8 +380,14 @@ describe('scripts/smoke-1b.mjs (e2e)', () => {
   afterEach(async () => {
     await fd.sql(`DROP TRIGGER IF EXISTS t14_on_close ON folio`);
     await fd.sql(`DROP TRIGGER IF EXISTS t14_on_document ON folio_document`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_day ON business_day`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_line ON folio_line`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_payment ON payment`);
     await fd.sql(`DROP FUNCTION IF EXISTS t14_on_close()`);
     await fd.sql(`DROP FUNCTION IF EXISTS t14_on_document()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_day()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_line()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_payment()`);
   });
   afterAll(async () => {
     await fd?.close();
@@ -682,6 +688,21 @@ describe('scripts/smoke-1b.mjs (e2e)', () => {
   );
 
   it(
+    'a manager passes the role check and runs the whole smoke',
+    async () => {
+      const manager = await seedUser(fd.ta.testDb, 'manager', { email: 'menadzer@hotel.test' });
+      setClock(new Date(clock.getTime() + 60_000));
+      const out = await node(SMOKE_1B, ['--api', api, '--email', manager.email, '--totp', totpGenerate(manager.totpSecret!, clock), '--allow-close'], {
+        HOTEL_SMOKE_PASSWORD: PASSWORD,
+      });
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +sign-in$/m);
+    },
+    LONG,
+  );
+
+  it(
     'a reservation left expected by a failed run for the open day is taken up again instead of booking another',
     async () => {
       expect((await smoke(['--allow-close'])).code).toBe(0); // creates SMOKE, closes 2026-11-02; the day is now 2026-11-03
@@ -823,6 +844,51 @@ describe('scripts/smoke-1b.mjs (e2e)', () => {
       expect(out.code).toBe(1);
       expect(out.stdout).toMatch(/^FAIL folio check: folio nije zatvoren \(status open\)$/m);
     }, LONG);
+
+    it('a close that opens another day than the next one fails the "next day" check', async () => {
+      expect((await smoke()).code).toBe(0); // opens 2026-11-02 and leaves it open
+      await jump(new Date('2026-11-04T08:00:00Z'));
+      await trigger(`
+        CREATE FUNCTION t14_on_day() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM business_day WHERE property_id = NEW.property_id AND status = 'closed') THEN
+            NEW.day := NEW.day + 1;
+          END IF;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_day BEFORE INSERT ON business_day FOR EACH ROW EXECUTE FUNCTION t14_on_day()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(
+        /^FAIL business day: posle zatvaranja 2026-11-02 otvoren je dan 2026-11-04, očekivano 2026-11-03$/m,
+      );
+    }, LONG);
+
+    it('a stored charge of another amount than the one sent fails the charge step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_line() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.description = 'Smoke mini bar' THEN NEW.amount_minor := 60000; END IF;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_line BEFORE INSERT ON folio_line FOR EACH ROW EXECUTE FUNCTION t14_on_line()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL charge: zaduženje je 60000$/m);
+    }, LONG);
+
+    it('a stored cash payment of another amount than the one sent fails the payment step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_payment() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.method = 'cash' THEN NEW.amount_minor := 40000; END IF;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_payment BEFORE INSERT ON payment FOR EACH ROW EXECUTE FUNCTION t14_on_payment()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL cash payment: uplata je 40000$/m);
+    }, LONG);
   });
 
   describe('arguments', () => {
@@ -843,6 +909,12 @@ describe('scripts/smoke-1b.mjs (e2e)', () => {
 
     it('refuses a --mail-wait outside 0-300 seconds', async () => {
       const out = await node(SMOKE_1B, ['--api', api, '--email', owner.email, '--mail-wait', '999'], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+      expect(out.code).toBe(1);
+      expect(out.stderr).toMatch(/--mail-wait mora biti od 0 do 300 sekundi/);
+    });
+
+    it.each(['abc', '-1'])('refuses a --mail-wait that is not a number or is negative (%s)', async (value) => {
+      const out = await node(SMOKE_1B, ['--api', api, '--email', owner.email, '--mail-wait', value], { HOTEL_SMOKE_PASSWORD: PASSWORD });
       expect(out.code).toBe(1);
       expect(out.stderr).toMatch(/--mail-wait mora biti od 0 do 300 sekundi/);
     });

@@ -142,11 +142,16 @@ isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_te
   dana uključujući, i to samo kad je njegova rezervacija potvrđena; zato i gost koji je trebalo da stigne baš
   na dan migracije, a nije prijavljen, postaje no-show. Navodi ih u izveštaju i skida ih sa kalendara. Zatvaranje je trajno, pa ga na stagingu (prave podatke Demo Hotela) pokreće samo
   korisnik; sesija implementera ga ne zatvara.
-- **`smoke-1b` (stiže sa Taskom 14, još ne postoji):** `HOTEL_SMOKE_PASSWORD=… node scripts/smoke-1b.mjs
-  --api http://192.168.1.199:4200 --email <vlasnik> (--totp <6 cifara> | --totp-file ~/owner-totp.txt)
-  [--allow-close] [--mail-to <adresa>]`. Radi samo dok je Turnstile isključen. Bez `--allow-close` staje
-  kad poslovni dan kasni. Ostavlja prave podatke (gost „Smoke Test 1b", zatvoreni dani, nefiskalni računi
-  `N-…`), pa ga pokreće korisnik, ne implementer.
+- **`smoke-1b`:** `HOTEL_SMOKE_PASSWORD=… node scripts/smoke-1b.mjs --api http://192.168.1.199:4200
+  --email <vlasnik> (--totp <6 cifara> | --totp-file ~/owner-totp.txt) [--allow-close] [--mail-to <adresa>]
+  [--mail-wait <sekundi>]`. Lozinka se čita samo iz `HOTEL_SMOKE_PASSWORD` (nema `--password`). Radi samo dok je
+  Turnstile isključen. Licenca na stagingu mora imati `hotel.folio`. Pokreće ga samo vlasnik, ne implementer.
+  Prvo izmiruje ostatke gosta „Smoke Test 1b" na jedinicama S-1 i S-2. Nema pokretanja „samo za pregled": bez
+  `--allow-close` staje sa greškom kad poslovni dan kasni, a na danu koji ne kasni ipak rezerviše, zadužuje,
+  naplaćuje i izdaje račun `N-…`. Sa `--allow-close` zatvara svaki dan koji kasni i današnji poslovni dan, trajno:
+  potvrđeni dolasci do tog dana (uključujući njega) koji nisu prijavljeni postaju no-show, prva noć se može
+  naplatiti, a recepcija prelazi na sutra. Treće pokretanje na istom poslovnom danu pada jer su S-1 i S-2
+  zauzete. Ostavlja prave podatke (gost „Smoke Test 1b", zatvoreni dani, nefiskalni računi `N-…`).
 - Kod za ručno pokretanje baza: `git archive HEAD | ssh … "tar -x -C /volume1/ci/hotel/src"` (pre toga `rm -rf` samo
   `/volume1/ci/hotel/src`).
 - Lozinke: `/volume1/ci/hotel/hotel.env` (`600`, nasumične, napravljene 2026-10-26). Pravi se samo jednom
