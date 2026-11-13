@@ -279,6 +279,58 @@ describe('outbox: reservation e-mails (e2e)', () => {
     ]);
   });
 
+  // Ruling 41: the claim never hands out a confirmation of a cancelled reservation; it closes the row instead.
+  const expectOnlyCancellationSent = async () => {
+    expect(titles()).toEqual(['Otkazana rezervacija']);
+    expect(closed(await rows())).toEqual([
+      ['reservation_cancelled', 'sent', null],
+      ['reservation_confirmed', 'skipped', CANCELLED_REASON],
+    ]);
+    expect((await rows()).find((x) => x.template === 'reservation_confirmed')).toMatchObject({ lease: null });
+  };
+
+  it('a confirmation whose send failed after the cancel is never sent: the claim closes it', async () => {
+    const b = await book();
+    fd.mail.failNext(new MailError('smtp_down', 'Server ne odgovara.', false));
+    const hold = fd.mail.holdNext();
+    const run = fd.dispatcher.runOnce();
+    try {
+      await Promise.race([hold.entered, delay(5_000).then(() => Promise.reject(new Error('the send never started')))]);
+      expect((await cancel(b)).status).toBe(200); // the send in flight cannot be stopped
+    } finally {
+      hold.release();
+    }
+    expect(await run).toEqual({ sent: 0, failed: 0, retried: 1 });
+    expect((await rows()).find((x) => x.template === 'reservation_confirmed')!.status).toBe('pending');
+    fd.setNow(at(2)); // past the 1 minute backoff
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 1, failed: 0, retried: 0 }); // the cancellation only
+    fd.setNow(at(400));
+    expect(await fd.dispatcher.runOnce()).toEqual(NONE);
+    await expectOnlyCancellationSent();
+  });
+
+  it('a confirmation whose lease ran out after the cancel is never sent: the claim closes it', async () => {
+    const b = await book();
+    await fd.sql(`UPDATE outbox_message SET status = 'sending', lease_until = $1`, [at(1)]); // a process died mid-send
+    expect((await cancel(b)).status).toBe(200);
+    expect((await rows()).find((x) => x.template === 'reservation_confirmed')!.status).toBe('sending');
+    fd.setNow(at(6));
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 1, failed: 0, retried: 0 }); // the cancellation only
+    await expectOnlyCancellationSent();
+  });
+
+  it('control: a confirmation of a live reservation is still sent after a temporary failure and after an expired lease', async () => {
+    await book('2026-11-05', '2026-11-06');
+    await book('2026-11-08', '2026-11-09');
+    fd.mail.failNext(new MailError('smtp_down', 'Server ne odgovara.', false));
+    expect(await fd.dispatcher.runOnce(1)).toEqual({ sent: 0, failed: 0, retried: 1 }); // one message backs off
+    const dead = (await rows()).find((x) => x.attempts === 0)!; // the other one was never taken
+    await fd.sql(`UPDATE outbox_message SET status = 'sending', lease_until = $1 WHERE id = $2`, [at(1), dead.id]);
+    fd.setNow(at(6));
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 2, failed: 0, retried: 0 });
+    expect((await rows()).map((x) => x.status)).toEqual(['sent', 'sent']);
+  });
+
   it('resend of a closed confirmation is 409 message_reservation_cancelled and queues nothing', async () => {
     const b = await book();
     fd.mail.failNext(new MailError('smtp_550', 'SMTP server je odbio poruku (odgovor 550).', true));

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { CLOCK, type Clock } from '../common/clock';
 import { DB, type Db } from '../db/tokens';
 import { MAIL_FROM, MAIL_TRANSPORT, MailError, type MailTransport } from './mail-transport';
+import { RESERVATION_CANCELLED_REASON } from './outbox.service';
 import { render, type ReservationPayload, type Template } from './templates';
 
 // Sends what the outbox holds (hotel-api process, started by main.ts after the
@@ -86,15 +87,27 @@ export class OutboxDispatcher implements OnModuleDestroy {
   private async claim(limit: number): Promise<Claimed[]> {
     const now = this.clock();
     return this.db.transaction(async (tx) => {
-      const { rows } = await tx.execute<Claimed>(sql`
-        SELECT id, property_id, template, recipient, payload, attempts
-          FROM outbox_message
-         WHERE (status = 'pending' OR (status = 'sending' AND lease_until < ${now.toISOString()}::timestamptz))
-           AND next_attempt_at <= ${now.toISOString()}::timestamptz
-         ORDER BY next_attempt_at, id
-           FOR UPDATE SKIP LOCKED
+      // The reservation is read, never locked: the dispatcher takes no reservation lock while it holds an outbox row.
+      const { rows: due } = await tx.execute<Claimed & { reservation_status: string | null }>(sql`
+        SELECT m.id, m.property_id, m.template, m.recipient, m.payload, m.attempts, r.status AS reservation_status
+          FROM outbox_message m
+          LEFT JOIN reservation r ON r.id = m.reservation_id AND r.property_id = m.property_id
+         WHERE (m.status = 'pending' OR (m.status = 'sending' AND m.lease_until < ${now.toISOString()}::timestamptz))
+           AND m.next_attempt_at <= ${now.toISOString()}::timestamptz
+         ORDER BY m.next_attempt_at, m.id
+           FOR UPDATE OF m SKIP LOCKED
          LIMIT ${limit}`);
-      for (const m of rows) {
+      // A confirmation of a cancelled reservation is never handed out (Ruling 41): it is closed here, not left
+      // waiting. A send already in flight at the moment of the cancel cannot be stopped.
+      const rows: Claimed[] = [];
+      for (const { reservation_status, ...m } of due) {
+        if (m.template === 'reservation_confirmed' && reservation_status === 'cancelled') {
+          await tx.execute(sql`
+            UPDATE outbox_message SET status = 'skipped', lease_until = NULL, last_error = ${RESERVATION_CANCELLED_REASON}
+             WHERE id = ${m.id} AND property_id = ${m.property_id}`);
+          continue;
+        }
+        rows.push(m);
         await tx.execute(sql`
           UPDATE outbox_message
              SET status = 'sending', lease_until = ${addMinutes(now, LEASE_MINUTES).toISOString()}::timestamptz
@@ -130,8 +143,10 @@ export class OutboxDispatcher implements OnModuleDestroy {
     const at = this.clock();
     const attempts = m.attempts + 1;
     const atSql = sql`${at.toISOString()}::timestamptz`;
-    // Each write is guarded by status = 'sending': a message whose lease ran out and was claimed again has been
-    // finished by the other run already, and this late result is dropped (no attempt row, not counted).
+    // Each write needs status = 'sending'. That does not identify this claim: if another run took the message over
+    // and is still sending, a late result from here still matches and the later one is dropped instead. It does stop
+    // a result from overwriting a message that is already sent, failed or back in the queue (dropped: no attempt
+    // row, not counted).
     return this.db.transaction(async (tx) => {
       let outcome: keyof DispatchResult;
       let moved: { rows: unknown[] };
