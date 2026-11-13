@@ -98,11 +98,12 @@ describe('outbox: reservation e-mails (e2e)', () => {
   });
 
   it('a booking on a named unit puts the unit in the snapshot; the profile contacts reach it', async () => {
-    // Straight into the table: the legal profile's own API is not under test here.
-    await fd.sql(
-      `INSERT INTO legal_profile (property_id, kind, email, phone)
-       SELECT id, 'legal_entity', 'recepcija@demo.example', '+381 11 123 456' FROM property`,
-    );
+    const profile = await fd.put('/legal-profile', {
+      kind: 'legal_entity', legalName: 'Demo d.o.o.', taxId: '100002887', registryId: '07036540',
+      vatPayer: false, address: 'Glavna 1', postalCode: '11000', city: 'Beograd',
+      email: 'recepcija@demo.example', phone: '+381 11 123 456',
+    });
+    expect([profile.status, profile.body.code ?? null]).toEqual([200, null]);
     await fd.bookStay({ typeId: t.typeId, planId: t.planId, unitId: t.unitIds[1] }, '2026-11-05', '2026-11-06');
     const [m] = await fd.sql<{ payload: { stays: Array<{ unitName: string }>; propertyEmail: string; propertyPhone: string } }>(
       `SELECT payload FROM outbox_message`,
