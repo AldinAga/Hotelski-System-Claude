@@ -78,12 +78,174 @@ export interface CalendarView {
 }
 
 export type ReservationStatus = 'requested' | 'confirmed' | 'cancelled' | 'no_show';
-export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled';
+export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled' | 'no_show';
 
 export interface PricedNight {
   day: string;
   priceMinor: number;
 }
+
+/** GET /guests and the guests of a stay (guests.service.ts). */
+export interface Guest {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string | null;
+  language: string;
+  note: string | null;
+}
+
+export type StayGuest = Guest & { isPrimary: boolean };
+
+/** GET /stays/:id/check-out-preview: what check-out would do now (stay-lifecycle.service.ts). */
+export interface CheckOutPreview {
+  businessDate: string;
+  keptUntil: string;
+  earlyDeparture: boolean;
+  nightsToPost: Array<{ night: string; priceMinor: number }>;
+  nightsToRelease: string[];
+  balanceMinor: number;
+}
+
+/** GET /stays/:id/folio and the lines and payments in it (folio.service.ts). Totals come from the server. */
+export type FolioStatus = 'none' | 'open' | 'closed';
+
+export interface FolioLine {
+  id: string;
+  kind: 'accommodation' | 'service' | 'fee' | 'correction' | string;
+  description: string;
+  amountMinor: number;
+  vatRateBp: number | null;
+  businessDate: string;
+  night: string | null;
+  sourceType: string;
+  reversesLineId: string | null;
+  /** The correction that reverses this line. */
+  reversedBy: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface FolioPayment {
+  id: string;
+  method: PaymentMethod | string;
+  amountMinor: number;
+  businessDate: string;
+  reference: string | null;
+  reversesPaymentId: string | null;
+  /** The payment that voids this one. */
+  voidedBy: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface Folio {
+  /** null while the stay has no folio (nothing was charged or paid yet). */
+  id: string | null;
+  stayId: string;
+  reservationId: string;
+  status: FolioStatus;
+  lines: FolioLine[];
+  payments: FolioPayment[];
+  chargesMinor: number;
+  paymentsMinor: number;
+  /** Charges minus payments; negative is a credit the guest has. */
+  balanceMinor: number;
+  /** Agreed nights not yet posted, for the pro forma and the check-out preview. */
+  unpostedNights: Array<{ night: string; priceMinor: number }>;
+  /** The VAT rates (basis points) a manual charge may carry. */
+  vatRatesBp: number[];
+  /** Set while fiscalisation is required but not switched on. */
+  fiscalNotice: 'not_available_yet' | null;
+}
+
+export type PaymentMethod = 'cash' | 'card' | 'transfer';
+
+export const PAYMENT_METHODS: Array<{ value: PaymentMethod; label: string }> = [
+  { value: 'cash', label: 'Gotovina' },
+  { value: 'card', label: 'Kartica' },
+  { value: 'transfer', label: 'Prenos' },
+];
+
+export function paymentMethodLabel(method: string): string {
+  return PAYMENT_METHODS.find((m) => m.value === method)?.label ?? method;
+}
+
+export type DocumentKind = 'receipt' | 'proforma';
+
+/** The snapshot a document was issued with (documents.service.ts). Seller fields can be null. */
+export interface FolioDocumentContent {
+  kind: DocumentKind;
+  number: string;
+  issuedAt: string;
+  businessDate: string;
+  notice: string;
+  seller: {
+    legalName: string | null;
+    taxId: string | null;
+    /** A natural person's JMBG arrives masked. */
+    registryId: string | null;
+    address: string | null;
+    postalCode: string | null;
+    city: string | null;
+    bankAccount: string | null;
+    vatPayer: boolean;
+  };
+  guest: { name: string; email: string | null };
+  reservation: { number: string; arrival: string; departure: string; unit: string | null };
+  lines: Array<{
+    description: string;
+    night: string | null;
+    amountMinor: number;
+    vatRateBp: number | null;
+    /** A night the pro forma expects but that is not posted yet. */
+    expected: boolean;
+  }>;
+  payments: Array<{ method: string; amountMinor: number; businessDate: string }>;
+  totalMinor: number;
+  paidMinor: number;
+  dueMinor: number;
+  /** VAT contained in the prices, per rate; null when the seller is not a VAT payer or a line has no rate. */
+  vat: Array<{ rateBp: number; baseMinor: number; vatMinor: number }> | null;
+}
+
+export interface FolioDocument {
+  id: string;
+  kind: DocumentKind;
+  number: string;
+  issuedAt: string;
+  content: FolioDocumentContent;
+}
+
+export interface FolioDocumentItem {
+  id: string;
+  kind: DocumentKind;
+  number: string;
+  issuedAt: string;
+}
+
+export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
+  receipt: 'Nefiskalni račun',
+  proforma: 'Predračun',
+};
+
+export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+
+/** GET /reservations/:id/messages (mail module). */
+export interface ReservationMessage {
+  id: string;
+  template: 'reservation_confirmed' | 'reservation_cancelled';
+  recipient: string | null;
+  status: OutboxStatus;
+  attempts: number;
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  sentAt: string | null;
+  history: Array<{ at: string; ok: boolean; error: string | null }>;
+}
+
+export type ReservationStay = Reservation['stays'][number];
 
 export interface Reservation {
   id: string;
@@ -108,6 +270,8 @@ export interface Reservation {
     status: StayStatus;
     nights: PricedNight[];
     totalMinor: number;
+    /** Primary guest first, then in the order they were added. */
+    guests: StayGuest[];
   }>;
   totalMinor: number;
 }
@@ -130,6 +294,7 @@ export const STAY_STATUS_LABELS: Record<StayStatus, string> = {
   in_house: 'U objektu',
   checked_out: 'Odjavljen',
   cancelled: 'Otkazan',
+  no_show: 'Nije došao',
 };
 
 export type Board = 'RO' | 'BB' | 'HB' | 'FB';

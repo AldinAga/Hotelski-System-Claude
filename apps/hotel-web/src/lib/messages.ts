@@ -1,5 +1,5 @@
 import { ApiError } from './api';
-import { formatDate } from './format';
+import { formatDate, formatRsd } from './format';
 
 /**
  * What the person at the desk reads for every error code the screens can
@@ -23,7 +23,6 @@ export const MESSAGES: Record<string, string> = {
   licensing_not_configured: 'Licenciranje na serveru nije podešeno. Obratite se podršci.',
   central_admin_unavailable: 'Centralni admin trenutno nije dostupan. Aktivacioni kod je verovatno još važeći; pokušajte ponovo.',
   property_missing: 'Objekat još nije podešen. Završite prvo podešavanje.',
-  legal_profile_missing: 'Pravni profil objekta još nije podešen.',
 
   // sign-in and roles
   invalid_credentials: 'Neispravna e-adresa ili lozinka.',
@@ -111,9 +110,40 @@ export const MESSAGES: Record<string, string> = {
   document_empty: 'Folio nema nijednu stavku ni plaćanje, pa dokument ne može da se izda.',
   document_not_found: 'Dokument ne postoji. Osvežite stranicu.',
 
-  // e-mails to guests (outbox)
+  // folio: charges, payments, refunds, corrections
+  line_not_found: 'Stavka folija ne postoji. Osvežite stranicu.',
+  payment_not_found: 'Plaćanje ne postoji. Osvežite stranicu.',
+  folio_closed: 'Folio je zatvoren i ne prima nove stavke ni plaćanja.',
+  idempotency_key_reused:
+    'Ovaj zahtev je već zabeležen, ali sa drugačijim podacima. Zatvorite prozor i proverite folio pre nego što pokušate ponovo.',
+  stay_not_chargeable: 'Na boravak u ovom stanju ne mogu se dodavati zaduženja.',
+  cannot_reverse_correction: 'Storno stavka se ne može stornirati.',
+  line_already_reversed: 'Stavka je već stornirana.',
+  refund_exceeds_credit: 'Povraćaj ne može biti veći od preplate na foliju ({creditMinor}).',
+  cannot_void_reversal: 'Storno plaćanja se ne može stornirati.',
+  payment_already_voided: 'Plaćanje je već stornirano.',
+
+  // check-in and check-out
+  check_in_wrong_day: 'Dolazak je {arrival}, a poslovni dan je {businessDate}. Zatvorite poslovni dan pre prijave gosta.',
+  // The same code when the arrival is already behind the business day (see messageFor).
+  check_in_wrong_day_past: 'Dolazak je bio {arrival}, a poslovni dan je {businessDate}. Prijava na dan dolaska više nije moguća.',
+  unit_required: 'Prvo dodelite jedinicu boravku.',
+  reservation_not_confirmed: 'Rezervacija nije potvrđena, pa se gost ne može prijaviti.',
+  stay_not_expected: 'Prijaviti se može samo gost čiji se dolazak očekuje. Osvežite prikaz.',
+  stay_not_in_house: 'Odjaviti se može samo gost koji je prijavljen. Osvežite prikaz.',
+  folio_balance_open: 'Saldo folija nije nula ({balanceMinor}). Naplatite ili vratite razliku pre odjave.',
+
+  // guests of a stay
+  guest_not_found: 'Gost ne postoji. Osvežite stranicu.',
+  guest_not_on_stay: 'Gost nije na ovom boravku. Osvežite stranicu.',
+  guest_already_on_stay: 'Gost je već na ovom boravku.',
+  too_many_guests: 'Na boravku može biti najviše {limit} gostiju (odrasli i deca zajedno).',
+  primary_guest_required: 'Nosilac boravka se ne može ukloniti. Prvo postavite drugog nosioca.',
+  stay_not_editable: 'Gosti se ne mogu menjati na boravku u ovom stanju.',
+
+  // reservation e-mails
   message_not_found: 'Poruka ne postoji. Osvežite stranicu.',
-  message_already_sent: 'Poruka je već poslata gostu.',
+  message_already_sent: 'Poruka je već poslata.',
   message_has_no_recipient: 'Gost nema e-adresu, pa poruka ne može da se pošalje.',
 };
 
@@ -151,7 +181,8 @@ const FIELD_LABELS: Record<string, string> = {
   phone: 'Telefon',
   accommodationCategory: 'Vrsta smeštaja',
   categorizationNumber: 'Broj rešenja o kategorizaciji',
-  fiscalMode: 'Fiskalizacija',
+  kind: 'Pravni oblik',
+  fiscalComplianceMode: 'Fiskalizacija',
   source: 'Izvor',
   channel: 'Kanal',
   'holder.firstName': 'Ime',
@@ -167,6 +198,27 @@ const FIELD_LABELS: Record<string, string> = {
   ratePlanId: 'Cenovnik',
   unitId: 'Jedinica',
   version: 'Verzija',
+  q: 'Pretraga',
+  guestId: 'Gost',
+  firstName: 'Ime',
+  lastName: 'Prezime',
+  // folio: charges, payments, refunds and corrections
+  description: 'Opis',
+  amountMinor: 'Iznos',
+  vatRateBp: 'PDV stopa',
+  method: 'Način plaćanja',
+  reference: 'Referenca',
+  key: 'Ključ zahteva',
+  'guest.firstName': 'Ime',
+  'guest.lastName': 'Prezime',
+  'guest.email': 'E-adresa',
+  'guest.phone': 'Telefon',
+  // business settings and the day close (Task 12)
+  autoCloseTime: 'Vreme automatskog zatvaranja',
+  noShowCharge: 'Naplata kad gost ne dođe',
+  accommodationVatBp: 'PDV stopa smeštaja',
+  vatRatesBp: 'Dozvoljene PDV stope',
+  day: 'Poslovni dan',
 };
 
 /** "stays[0].adults" → "adults": the forms show one stay at a time. */
@@ -183,16 +235,30 @@ function fill(template: string, details: Record<string, unknown> | null): string
       return '';
     }
     if (key === 'field') return fieldLabel(String(v));
-    if (key === 'day' && typeof v === 'string') return formatDate(v);
+    const isDayKey = key === 'day' || key === 'arrival' || key === 'businessDate' || key === 'today' || key === 'open';
+    if (isDayKey && typeof v === 'string') return formatDate(v);
+    if ((key === 'balanceMinor' || key === 'creditMinor') && typeof v === 'number') return formatRsd(v);
     return String(v);
   });
   return missing ? null : out;
 }
 
+/**
+ * check_in_wrong_day means two things: the open business day is still behind
+ * the arrival (close it first), or it is already past it (nothing to close).
+ */
+function codeFor(err: ApiError): string {
+  if (err.code !== 'check_in_wrong_day') return err.code;
+  const { arrival, businessDate } = err.details ?? {};
+  return typeof arrival === 'string' && typeof businessDate === 'string' && arrival < businessDate
+    ? 'check_in_wrong_day_past'
+    : err.code;
+}
+
 /** The text to show for any error a screen caught. */
 export function messageFor(err: unknown): string {
   if (!(err instanceof ApiError)) return MESSAGES.unknown;
-  const template = MESSAGES[err.code];
+  const template = MESSAGES[codeFor(err)];
   if (template) {
     const text = fill(template, err.details);
     if (text !== null) return text;

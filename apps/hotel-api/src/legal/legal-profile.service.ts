@@ -2,8 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { AuditService } from '../common/audit.service';
 import { CLOCK, type Clock } from '../common/clock';
-import { DomainError } from '../common/domain-error';
-import { asBody, optionalText, validationFailed, EMAIL_MAX, type Body } from '../common/input';
+import { asBody, optionalText, requireOneOf, validationFailed, EMAIL_MAX, type Body } from '../common/input';
 import { PropertyContext } from '../common/property-context';
 import { DB, type Db, type Tx } from '../db/tokens';
 import type { Actor } from '../reservations/reservations.service';
@@ -28,11 +27,12 @@ export const ACCOMMODATION_CATEGORIES = [
   'other',
 ] as const;
 export type AccommodationCategory = (typeof ACCOMMODATION_CATEGORIES)[number];
-export const FISCAL_MODES = ['required', 'invoice_only', 'disabled'] as const;
-export type FiscalMode = (typeof FISCAL_MODES)[number];
+export const FISCAL_COMPLIANCE_MODES = ['required', 'invoice_only', 'disabled'] as const;
+export type FiscalComplianceMode = (typeof FISCAL_COMPLIANCE_MODES)[number];
 
 export interface LegalProfileView {
-  kind: LegalKind;
+  /** Null while the profile has not been saved (F30). */
+  kind: LegalKind | null;
   legalName: string | null;
   taxId: string | null;
   /** MB; for a natural person the JMBG, masked. */
@@ -47,7 +47,7 @@ export interface LegalProfileView {
   phone: string | null;
   accommodationCategory: AccommodationCategory | null;
   categorizationNumber: string | null;
-  fiscalMode: FiscalMode;
+  fiscalComplianceMode: FiscalComplianceMode | null;
   /** Shown while fiscalisation is required but not switched on (Ruling 4). */
   fiscalNotice: 'not_available_yet' | null;
   /** True when nothing needed for an invoice is missing. */
@@ -72,7 +72,7 @@ interface Stored {
   phone: string | null;
   accommodationCategory: AccommodationCategory | null;
   categorizationNumber: string | null;
-  fiscalMode: FiscalMode;
+  fiscalComplianceMode: FiscalComplianceMode;
 }
 
 type Row = {
@@ -90,11 +90,11 @@ type Row = {
   phone: string | null;
   accommodation_category: AccommodationCategory | null;
   categorization_number: string | null;
-  fiscal_mode: FiscalMode;
+  fiscal_compliance_mode: FiscalComplianceMode;
 };
 
 const COLUMNS = sql`kind, legal_name, tax_id, registry_id, vat_payer, address, postal_code, city, activity_code,
-  bank_account, email, phone, accommodation_category, categorization_number, fiscal_mode`;
+  bank_account, email, phone, accommodation_category, categorization_number, fiscal_compliance_mode`;
 
 function storedOf(r: Row): Stored {
   return {
@@ -112,7 +112,7 @@ function storedOf(r: Row): Stored {
     phone: r.phone,
     accommodationCategory: r.accommodation_category,
     categorizationNumber: r.categorization_number,
-    fiscalMode: r.fiscal_mode,
+    fiscalComplianceMode: r.fiscal_compliance_mode,
   };
 }
 
@@ -134,12 +134,41 @@ function missingOf(s: Stored): string[] {
   return missing;
 }
 
+/** Fiscalisation is required of companies and entrepreneurs, not of a natural person (same rule as the 0011 backfill). */
+export function defaultFiscalComplianceMode(kind: LegalKind): FiscalComplianceMode {
+  return kind === 'natural_person' ? 'disabled' : 'required';
+}
+
+/** What GET answers before the profile exists (F30). A fresh object each time: callers may not share it. */
+function emptyView(): LegalProfileView {
+  return {
+    kind: null,
+    legalName: null,
+    taxId: null,
+    registryId: null,
+    vatPayer: false,
+    address: null,
+    postalCode: null,
+    city: null,
+    activityCode: null,
+    bankAccount: null,
+    email: null,
+    phone: null,
+    accommodationCategory: null,
+    categorizationNumber: null,
+    fiscalComplianceMode: null,
+    fiscalNotice: null,
+    complete: false,
+    missing: ['legalName', 'address', 'city', 'taxId', 'registryId'],
+  };
+}
+
 function viewOf(s: Stored): LegalProfileView {
   const missing = missingOf(s);
   return {
     ...s,
     registryId: shownRegistryId(s),
-    fiscalNotice: s.fiscalMode === 'required' ? 'not_available_yet' : null,
+    fiscalNotice: s.fiscalComplianceMode === 'required' ? 'not_available_yet' : null,
     complete: missing.length === 0,
     missing,
   };
@@ -238,10 +267,10 @@ export function parseLegalProfileInput(raw: unknown, kind: LegalKind): Partial<O
     out.accommodationCategory = v as AccommodationCategory | null;
   }
 
-  if (b.fiscalMode !== undefined) {
-    const v = b.fiscalMode;
-    if (typeof v !== 'string' || !(FISCAL_MODES as readonly string[]).includes(v)) throw validationFailed('fiscalMode');
-    out.fiscalMode = v as FiscalMode;
+  if (b.fiscalComplianceMode !== undefined) {
+    const v = b.fiscalComplianceMode;
+    if (typeof v !== 'string' || !(FISCAL_COMPLIANCE_MODES as readonly string[]).includes(v)) throw validationFailed('fiscalComplianceMode');
+    out.fiscalComplianceMode = v as FiscalComplianceMode;
   }
   return out;
 }
@@ -255,16 +284,49 @@ export class LegalProfileService {
     private readonly property: PropertyContext,
   ) {}
 
+  /** Without a row: kind and every field null, complete false. Writes nothing and never throws for it (F30). */
   async get(): Promise<LegalProfileView> {
     const propertyId = await this.property.id();
-    return viewOf(await this.read(this.db, propertyId, false));
+    const stored = await this.read(this.db, propertyId, false);
+    return stored ? viewOf(stored) : emptyView();
   }
 
+  /**
+   * The same read on the caller's transaction connection, for code that already
+   * holds one: `get()` would ask the pool for a second connection, and enough
+   * concurrent callers would each wait for a connection none of them can get.
+   * Takes the property id the caller already has (PropertyContext may hit the
+   * pool). Writes nothing and takes no row lock.
+   */
+  async getIn(tx: Tx, propertyId: string): Promise<LegalProfileView> {
+    const stored = await this.read(tx, propertyId, false);
+    return stored ? viewOf(stored) : emptyView();
+  }
+
+  /**
+   * Upsert. Without a row, kind is required in the body and decides the
+   * default fiscal compliance mode. With a row, kind may be repeated but not
+   * changed (422 field kind): it decides what registryId means.
+   */
   async update(raw: unknown, actor: Actor): Promise<LegalProfileView> {
     const propertyId = await this.property.id();
+    const body = asBody(raw);
     return this.db.transaction(async (tx) => {
-      const before = await this.read(tx, propertyId, true);
-      const patch = parseLegalProfileInput(raw, before.kind);
+      const existing = await this.read(tx, propertyId, false);
+      if (!existing) {
+        const kind = requireOneOf(body, 'kind', LEGAL_KINDS);
+        // Two first PUTs at once: the loser finds the row the winner made and updates it.
+        await tx.execute(sql`
+          INSERT INTO legal_profile (property_id, kind, fiscal_compliance_mode, updated_at)
+          VALUES (${propertyId}, ${kind}, ${defaultFiscalComplianceMode(kind)},
+                  ${this.clock().toISOString()}::timestamptz)
+          ON CONFLICT (property_id) DO NOTHING`);
+      }
+      const before = (await this.read(tx, propertyId, true))!;
+      if (body.kind !== undefined && requireOneOf(body, 'kind', LEGAL_KINDS) !== before.kind) {
+        throw refuse('kind', 'Pravni oblik se ne menja na ovom ekranu.');
+      }
+      const patch = parseLegalProfileInput(body, before.kind);
       const after: Stored = { ...before, ...patch };
       if (after.kind !== 'natural_person') {
         if (!after.taxId) throw refuse('taxId', 'PIB je obavezan.');
@@ -277,7 +339,7 @@ export class LegalProfileService {
                city = ${after.city}, activity_code = ${after.activityCode}, bank_account = ${after.bankAccount},
                email = ${after.email}, phone = ${after.phone},
                accommodation_category = ${after.accommodationCategory},
-               categorization_number = ${after.categorizationNumber}, fiscal_mode = ${after.fiscalMode},
+               categorization_number = ${after.categorizationNumber}, fiscal_compliance_mode = ${after.fiscalComplianceMode},
                updated_at = ${this.clock().toISOString()}::timestamptz
          WHERE property_id = ${propertyId}`);
       await this.audit.record(tx, {
@@ -286,20 +348,19 @@ export class LegalProfileService {
         action: 'legal_profile.update',
         entity: 'legal_profile',
         entityId: propertyId,
-        before: auditOf(before),
+        before: existing ? auditOf(before) : null,
         after: auditOf(after),
       });
       return viewOf(after);
     });
   }
 
-  private async read(q: Db | Tx, propertyId: string, lock: boolean): Promise<Stored> {
+  private async read(q: Db | Tx, propertyId: string, lock: boolean): Promise<Stored | null> {
     const { rows } = await q.execute<Row>(
       lock
         ? sql`SELECT ${COLUMNS} FROM legal_profile WHERE property_id = ${propertyId} FOR UPDATE`
         : sql`SELECT ${COLUMNS} FROM legal_profile WHERE property_id = ${propertyId}`,
     );
-    if (!rows[0]) throw new DomainError('legal_profile_missing', 'Pravni profil objekta još nije podešen.', 409);
-    return storedOf(rows[0]);
+    return rows[0] ? storedOf(rows[0]) : null;
   }
 }

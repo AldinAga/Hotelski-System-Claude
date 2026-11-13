@@ -195,6 +195,27 @@ describe('folio documents (e2e)', () => {
     expect(results.map((r) => r.body.number).sort()).toEqual(['N-2026-000001', 'N-2026-000002']);
   });
 
+  it('one key on two stays at once (a receipt and a pro forma): one document, the other is 409 idempotency_key_reused', async () => {
+    const a = await inHouse(0, '2026-11-02', '2026-11-03');
+    const b = await inHouse(1, '2026-11-02', '2026-11-03');
+    await pay(a.stayId, 10_000, 'pay-cross-0001');
+    await pay(b.stayId, 10_000, 'pay-cross-0002');
+    // Different kinds take different counter rows, so only the unique index can stop the second.
+    const results = await fd.raceUnderHeldDay(2, () => [issue(a.stayId, 'receipt', 'doc-cross-0001'), issue(b.stayId, 'proforma', 'doc-cross-0001')]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(results.find((r) => r.status === 409)!.body.code).toBe('idempotency_key_reused');
+    expect(await fd.sql('SELECT 1 FROM folio_document')).toHaveLength(1);
+  });
+
+  it('a pro forma of a cancelled stay lists no expected nights', async () => {
+    const b = await fd.bookStay({ typeId, planId }, '2026-11-05', '2026-11-07');
+    await pay(b.stayId, 10_000, 'pay-cancel-001');
+    expect((await fd.post(`/reservations/${b.reservationId}/cancel`, { version: b.version })).status).toBe(200);
+    const res = await issue(b.stayId, 'proforma', 'doc-cancel-001');
+    expect(res.status).toBe(201);
+    expect(res.body.content).toMatchObject({ lines: [], totalMinor: 0, paidMinor: 10_000, dueMinor: -10_000 });
+  });
+
   it('in safe mode documents are issued and read', async () => {
     const s = await inHouse(0, '2026-11-02', '2026-11-03');
     await pay(s.stayId, 10_000, 'pay-safe-0001');
@@ -207,10 +228,15 @@ describe('folio documents (e2e)', () => {
 
   it("seller.registryId of a natural person is masked, and the full JMBG is stored nowhere in the document", async () => {
     await fd.put('/legal-profile', { kind: 'natural_person', legalName: 'Marko Marković', registryId: JMBG, address: 'Selo 1', city: 'Zlatibor' });
+    await fd.put('/settings/business', { accommodationVatBp: 1000 });
     const b = await fd.bookStay({ typeId, planId }, '2026-11-05', '2026-11-06');
     const res = await issue(b.stayId, 'proforma', 'doc-natural-01');
     expect(res.status).toBe(201);
-    expect(res.body.content.seller).toMatchObject({ legalName: 'Marko Marković', registryId: MASKED_JMBG, taxId: null });
+    expect(res.body.content.seller).toMatchObject({ legalName: 'Marko Marković', registryId: MASKED_JMBG, taxId: null, vatPayer: false });
+    // Every line has a rate, but the seller is not a VAT payer: no VAT recap.
+    expect(res.body.content.lines.map((l: { vatRateBp: number | null }) => l.vatRateBp)).toEqual([1000]);
+    expect(res.body.content.vat).toBeNull();
+    expect(await fd.sql(`SELECT 1 FROM audit_log WHERE action = 'folio.document' AND after::text LIKE $1`, [`%${JMBG}%`])).toHaveLength(0);
     expect(await fd.sql(`SELECT 1 FROM folio_document WHERE content::text LIKE $1`, [`%${JMBG}%`])).toHaveLength(0);
   });
 
@@ -234,6 +260,52 @@ describe('folio documents (e2e)', () => {
     ]);
     // Another stay's documents are not listed.
     expect((await fd.get(`/stays/${fresh.stayId}/folio/documents`)).body).toEqual([]);
+  });
+
+  it('the list is ordered by issue time, not by the order the rows were written', async () => {
+    const s = await inHouse(0, '2026-11-02', '2026-11-03');
+    await pay(s.stayId, 10_000, 'pay-order-001');
+    fd.setNow(new Date('2026-11-02T09:00:00Z'));
+    const later = (await issue(s.stayId, 'receipt', 'doc-order-001')).body;
+    // The clock moves back (a correction): this document is written second but issued earlier.
+    fd.setNow(new Date('2026-11-02T08:30:00Z'));
+    const earlier = (await issue(s.stayId, 'proforma', 'doc-order-002')).body;
+    const list = await fd.get(`/stays/${s.stayId}/folio/documents`);
+    expect(list.body.map((d: { id: string }) => d.id)).toEqual([earlier.id, later.id]);
+  });
+
+  it('a receipt can be issued for a folio that is closed by the check-out', async () => {
+    const s = await inHouse(0, '2026-11-02', '2026-11-03');
+    expect((await pay(s.stayId, 1_000_000, 'pay-closed-001')).status).toBe(201);
+    expect((await fd.post(`/stays/${s.stayId}/check-out`, { version: s.version })).status).toBe(200);
+    expect(await fd.sql(`SELECT status FROM folio`)).toEqual([{ status: 'closed' }]);
+    const res = await issue(s.stayId, 'receipt', 'doc-closed-001');
+    expect(res.status).toBe(201);
+    expect(res.body.content).toMatchObject({ totalMinor: 1_000_000, paidMinor: 1_000_000, dueMinor: 0 });
+    expect(await fd.sql(`SELECT status FROM folio`)).toEqual([{ status: 'closed' }]);
+  });
+
+  it('the guest of a stay without a stay_guest row is the holder of the reservation', async () => {
+    const s = await inHouse(0, '2026-11-02', '2026-11-03');
+    await fd.sql('DELETE FROM stay_guest WHERE stay_id = $1', [s.stayId]); // a stay as phase 1a left it
+    const res = await issue(s.stayId, 'proforma', 'doc-holder-001');
+    expect(res.status).toBe(201);
+    expect(res.body.content.guest).toEqual({ name: 'Petar Petrović', email: 'petar@example.com' });
+  });
+
+  it('the number carries the year of the business day, not of the clock', async () => {
+    await fd.travel(new Date('2026-12-31T10:00:00Z'));
+    const b = await fd.bookStay({ typeId, planId }, '2026-12-31', '2027-01-02');
+    // The payment opens the business day 2026-12-31.
+    expect((await pay(b.stayId, 10_000, 'pay-year-00001')).status).toBe(201);
+    // 06:00 on 2027-01-01 in Belgrade: the calendar and the clock are in the new year, the business day is not closed yet.
+    await fd.travel(new Date('2027-01-01T05:00:00Z'));
+    const res = await issue(b.stayId, 'receipt', 'doc-year-00001');
+    expect(res.status).toBe(201);
+    expect(res.body.number).toBe('N-2026-000001');
+    expect(res.body.content).toMatchObject({ businessDate: '2026-12-31', number: 'N-2026-000001' });
+    expect(res.body.issuedAt).toBe('2027-01-01T05:00:00.000Z');
+    expect(await counters()).toEqual([{ kind: 'receipt', year: 2026, last: 1 }]);
   });
 
   it('unknown stay or document: 404', async () => {

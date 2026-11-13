@@ -4,27 +4,43 @@ import { useEffect, useState } from 'react';
 import type { LicenceSnapshot } from '@/components/licence-banner';
 import { api } from './api';
 
-/** States in which the API refuses every change (safe mode, or no usable licence). */
-const READ_ONLY_STATES: ReadonlySet<LicenceSnapshot['state']> = new Set(['EXPIRED', 'INVALID', 'NOT_ACTIVATED']);
+/**
+ * What the licence lets a screen do, from GET /licence:
+ * - full: VALID and GRACE, everything;
+ * - safe: EXPIRED (safe mode), only the actions in SAFE_MODE_ALLOWED
+ *   (hotel-api licensing/safe-mode.ts): viewing, check-out, payment, documents, closing the day;
+ * - none: INVALID and NOT_ACTIVATED, the API refuses every change.
+ */
+export type LicenceMode = 'full' | 'safe' | 'none';
+
+function modeOf(state: LicenceSnapshot['state']): LicenceMode {
+  if (state === 'EXPIRED') return 'safe';
+  if (state === 'INVALID' || state === 'NOT_ACTIVATED') return 'none';
+  return 'full';
+}
 
 /**
- * True while GET /licence reports a state in which changes are refused, so
- * a screen can disable its change controls instead of letting the API say
- * 403 safe_mode_blocked. Until the answer arrives (or when it fails) the
- * controls stay on: the API still refuses what it must.
+ * The licence mode, so a screen can disable controls instead of letting the
+ * API say 403. Until the answer arrives (or when it fails) the mode is full:
+ * the controls stay on and the API still refuses what it must.
  */
-export function useReadOnly(): boolean {
-  const [readOnly, setReadOnly] = useState(false);
+export function useLicenceMode(): LicenceMode {
+  const [mode, setMode] = useState<LicenceMode>('full');
   useEffect(() => {
     let live = true;
     api<LicenceSnapshot>('/licence')
       .then((l) => {
-        if (live) setReadOnly(READ_ONLY_STATES.has(l.state));
+        if (live) setMode(modeOf(l.state));
       })
       .catch(() => undefined);
     return () => {
       live = false;
     };
   }, []);
-  return readOnly;
+  return mode;
+}
+
+/** True outside full: the screens whose every control is a change disable them all. */
+export function useReadOnly(): boolean {
+  return useLicenceMode() !== 'full';
 }

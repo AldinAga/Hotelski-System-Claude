@@ -55,20 +55,39 @@ licencama i za POS i za hotel. Kvar u njemu pogađa oba proizvoda, zato:
 
 ### Testovi
 
-`infrastructure/nas/ci.sh` šalje radno stablo na NAS (`ci.sh <ref>` šalje `git archive <ref>`), pa tamo radi
-`pnpm install --frozen-lockfile`, build, `pnpm test` i `pnpm typecheck` kroz `docker exec` u
-`hotel-ci-runner-claude`; exit 0 samo kad je sve zeleno. `ci.sh --lock` ponovo pravi `pnpm-lock.yaml`
-na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
+**GitHub Actions** (`.github/workflows/ci.yml`) je glavni CI: na push (`master`, `phase-**`), PR ka `master` i ručno
+radi na NAS runneru (`github-runner-claude`, labele `self-hosted, nas`) install, build, proveru migracija, `pnpm test`
+i `pnpm typecheck`. Test baza je `hotel-postgres-test-claude` (priključena i na mrežu `claude-gh-runner_default`
+u `ci-compose.yml`); svaki run dobija svoje baze preko `HOTEL_TEST_DB_PREFIX=gh<run_id>_<attempt>_` i na kraju ih briše.
+Prvi korak failuje za nekoliko sekundi ako runner ne vidi bazu. Repo je javan: ne koristiti `pull_request_target`,
+a odobravanje PR-ova sa forkova ostaje uključeno.
+
+`infrastructure/nas/ci.sh` (stari put) šalje radno stablo na NAS (`ci.sh <ref>` šalje `git archive <ref>`), pa tamo radi
+isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_test_N`). `ci.sh --lock` ponovo pravi
+`pnpm-lock.yaml` na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
+`ci.sh` sa grane čiji `ci-compose.yml` nema mrežu `gh-runner` odvaja runner od test baze (GitHub run tada pada u prvom koraku).
+
+**Šta se sme obrisati i kada.** Odmah ništa. Posle merge-a ove grane u sve aktivne grane i kad niko više ne koristi `ci.sh`:
+(1) `infrastructure/nas/ci.sh`, (2) servis `hotel-ci-runner-claude` iz `ci-compose.yml`, pa
+`docker rm -f hotel-ci-runner-claude` (samo to ime), (3) `/volume1/ci/hotel/src` i `/volume1/ci/hotel/pnpm-store`.
+`ci.sh --lock` tada treba zameniti (lockfile se pravi ručno uz odobrenje). Ostaje:
+`hotel-postgres-test-claude` (koristi ga GitHub CI), `/volume1/ci/hotel/hotel.env`, `/volume1/ci/hotel/deploy`.
 
 ### Pokretanje i ažuriranje `claude-hotel`
 
 - **Deploy (staging faze 1a):** `bash infrastructure/nas/deploy.sh [ref]` (podrazumevano `HEAD`).
-  `ref` se jednom razrešava u pun SHA i isti SHA ide u `ci.sh`, `git archive` i oznaku slike.
-  Prvo `ci.sh <sha>` (crveno prekida), zatim `git archive <sha>` u `/volume1/ci/hotel/deploy`
-  (nikad radno stablo, nikad `src`), install i build u `hotel-ci-runner-claude` (web sa
-  `HOTEL_API_URL=http://hotel-api-claude:4200`), dopuna `hotel.env` (`hotel-env.sh` iz tog ref-a,
-  samo dodaje), slika `hotel-claude:<sha>`, provera da se baze i Redis ne bi ponovo napravili,
-  pa tek onda oznaka `hotel-claude:staging`. Baze i Redis se samo pokreću ako nedostaju
+  `ref` se jednom razrešava u pun SHA. Prvo `gh run list --commit <sha>`: GitHub run "CI" za taj tačan SHA mora imati
+  zaključak `success` (bez njega deploy staje s porukom; commit mora biti pushovan na `master` ili `phase-**`).
+  Zatim `git archive <sha>` u `/volume1/ci/hotel/deploy` (nikad radno stablo, nikad `src`), dopuna `hotel.env`
+  (`hotel-env.sh` iz tog ref-a, samo dodaje), pa `docker buildx build --secret id=npmrc,src=/volume1/ci/.npmrc`
+  u `hotel-claude:<sha>`. Install i build rade u build stage-u `infrastructure/docker/Dockerfile` (BuildKit, bez
+  kontejnera, pa bez Synology mejlova); registry token je samo secret mount, nikad sloj, ARG, ENV ni log; web se gradi
+  sa `HOTEL_API_URL=http://hotel-api-claude:4200`. Na NAS-u je `docker buildx` v0.14.1 (plugin korisnika `claude-ci`
+  u `~/.docker/cli-plugins`); klasični `docker build` ne zna secrete. Zatim provera da se baze i Redis ne bi ponovo
+  napravili, pa tek onda oznaka `hotel-claude:staging`. `deploy.sh --dry-run [ref]` samo proverava GitHub run
+  (NAS se ne dira); `deploy.sh --build-check [ref]` posle te provere gradi `hotel-claude:buildx-check` iz
+  `/volume1/ci/hotel/buildx-check` i staje (bez `hotel.env`, `:staging` i kontejnera); posle toga ručno
+  `docker rmi hotel-claude:buildx-check` i `rm -rf /volume1/ci/hotel/buildx-check`. Baze i Redis se samo pokreću ako nedostaju
   (`up -d --no-recreate --wait postgres hub-postgres redis`, nikad se ne prave ponovo), a `api` i
   `web` idu sa `up -d --no-deps --remove-orphans --wait api web`. Čišćenje: ostaju 3 najnovije
   `hotel-claude:<sha>` oznake. Ne dira ništa van `claude-hotel`, `hotel-claude` i `/volume1/ci/hotel/deploy`.

@@ -144,7 +144,7 @@ export class DocumentsService {
     try {
       return await this.db.transaction(async (tx) => {
         const businessDate = await this.days.lockOpen(tx, propertyId, 'share');
-        await this.stay(tx, propertyId, stayId);
+        // An unknown stay is 404 from ensureFolio below; the counter row it may have made rolls back.
         const year = Number(businessDate.slice(0, 4));
         // Lock order point 5, before the folio (6): the counter row, locked but not raised yet.
         await tx.execute(sql`
@@ -269,7 +269,7 @@ export class DocumentsService {
       businessDate: p.businessDate,
     }));
 
-    const profile = await this.legal.get();
+    const profile = await this.legal.getIn(tx, propertyId); // on tx: a second pool connection could deadlock the pool
     const seller = {
       legalName: profile.legalName ?? null,
       taxId: profile.taxId ?? null,

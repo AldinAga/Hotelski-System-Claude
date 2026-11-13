@@ -111,7 +111,7 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
     expect(rows[0].n).toBe(0);
   });
 
-  it('0011: the 1a legal profile row keeps its ids, gets fiscal_mode required and empty new fields', async () => {
+  it('0011: the 1a legal profile row keeps its ids, gets fiscal_compliance_mode required and empty new fields', async () => {
     const { rows } = await pool.query<Record<string, unknown>>(`SELECT * FROM legal_profile WHERE property_id = $1`, [seed.propertyId]);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -119,7 +119,7 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
       tax_id: '100000024',
       registry_id: '12345678',
       vat_payer: true,
-      fiscal_mode: 'required',
+      fiscal_compliance_mode: 'required',
     });
     for (const column of [
       'legal_name',
@@ -136,7 +136,7 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
       expect({ column, value: rows[0][column] }).toEqual({ column, value: null });
     }
     expect(rows[0].updated_at).toBeInstanceOf(Date);
-    await expect(pool.query(`UPDATE legal_profile SET fiscal_mode = 'sometimes'`)).rejects.toThrow(/legal_profile_fiscal_mode_check/);
+    await expect(pool.query(`UPDATE legal_profile SET fiscal_compliance_mode = 'sometimes'`)).rejects.toThrow(/legal_profile_fiscal_compliance_mode_check/);
     await expect(pool.query(`UPDATE legal_profile SET accommodation_category = 'castle'`)).rejects.toThrow(
       /legal_profile_accommodation_category_check/,
     );
@@ -151,13 +151,13 @@ describe('migrations 0008+ on a database holding phase 1a data', () => {
     try {
       await client.query('BEGIN');
       // One property per installation: turn the seeded row into a natural person, then backfill it.
-      await client.query(`UPDATE legal_profile SET kind = 'natural_person', fiscal_mode = 'required'`);
+      await client.query(`UPDATE legal_profile SET kind = 'natural_person', fiscal_compliance_mode = 'required'`);
       await client.query(backfill[0]);
-      const { rows } = await client.query<{ kind: string; fiscal_mode: string }>(`SELECT kind, fiscal_mode FROM legal_profile`);
-      expect(rows).toEqual([{ kind: 'natural_person', fiscal_mode: 'disabled' }]);
+      const { rows } = await client.query<{ kind: string; fiscal_compliance_mode: string }>(`SELECT kind, fiscal_compliance_mode FROM legal_profile`);
+      expect(rows).toEqual([{ kind: 'natural_person', fiscal_compliance_mode: 'disabled' }]);
       await client.query(`UPDATE legal_profile SET kind = 'entrepreneur'`);
       await client.query(backfill[0]);
-      expect((await client.query(`SELECT fiscal_mode FROM legal_profile`)).rows).toEqual([{ fiscal_mode: 'required' }]);
+      expect((await client.query(`SELECT fiscal_compliance_mode FROM legal_profile`)).rows).toEqual([{ fiscal_compliance_mode: 'required' }]);
     } finally {
       await client.query('ROLLBACK');
       client.release();
