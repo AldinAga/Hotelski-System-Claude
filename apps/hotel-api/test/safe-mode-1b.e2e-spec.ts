@@ -1,6 +1,6 @@
 import { SAFE_MODE_ALLOWED } from '../src/licensing/safe-mode';
 import { DAY_MS, startFrontDesk, type FrontDesk } from './front-desk';
-import { discoverRoutes, type RouteInfo } from './routes';
+import { ACTIONS_1B, discoverRoutes, type RouteInfo } from './routes';
 
 // One table of every phase 1b route against what the licence lets through
 // after it expires (safe mode). The expectation is this list, written by hand
@@ -26,9 +26,7 @@ const ALLOWED_IN_SAFE_MODE = new Set([
   'GET /reservations/:id/messages',
 ]);
 
-// The actions phase 1b added; phase 1a routes stay covered by their own specs.
-const ACTIONS_1B = /^(guest\.|stay\.check_|folio\.|business_day\.|settings\.|legal_profile\.|message\.)/;
-
+// Phase 1a routes stay covered by their own specs; ACTIONS_1B (test/routes.ts) picks the 1b ones.
 type Route1b = RouteInfo & { key: string; module: string; action: string };
 
 function routes1b(app: FrontDesk['app']): Route1b[] {
@@ -57,7 +55,7 @@ describe('phase 1b routes in safe mode (e2e)', () => {
   });
 
   it('the scan sees the phase 1b routes (not vacuous)', () => {
-    expect(routes.length).toBeGreaterThanOrEqual(25);
+    expect(routes.length).toBeGreaterThanOrEqual(28);
     expect(new Set(routes.map((r) => r.key)).size).toBe(routes.length);
   });
 
@@ -83,6 +81,10 @@ describe('phase 1b routes in safe mode (e2e)', () => {
 
     const wronglyBlocked: string[] = [];
     const wronglyAllowed: string[] = [];
+    const neverReachedHandler: string[] = [];
+    // The loop runs on the per-test database and really closes the business day
+    // (POST /business-day/close is listed), so the order of routes matters: nothing
+    // after that call may rely on the day still being open. Only the guard's answer is asserted.
     for (const r of routes) {
       const path = concretePath(r.path);
       const send = (cookie: string) =>
@@ -100,10 +102,14 @@ describe('phase 1b routes in safe mode (e2e)', () => {
       const listed = ALLOWED_IN_SAFE_MODE.has(r.key);
       if (listed && blocked) wronglyBlocked.push(`${r.key} (${r.action})`);
       if (!listed && !blocked) wronglyAllowed.push(`${r.key} (${r.action}) -> ${res.status} ${res.body?.code ?? ''}`);
-      // Whatever a listed route answers (200, 404, 422), it was not refused for the licence.
-      if (listed) expect([r.key, res.status === 401 || res.body?.code === 'route_not_classified']).toEqual([r.key, false]);
+      // Whatever a listed route answers (200, 404, 422), it was not refused for the licence;
+      // 401 (not signed in) or route_not_classified would mean the request never reached the handler.
+      const unauthenticated = res.status === 401;
+      const unclassified = res.body?.code === 'route_not_classified';
+      if (listed && (unauthenticated || unclassified)) neverReachedHandler.push(`${r.key} -> ${res.status} ${res.body?.code ?? ''}`);
     }
     expect(wronglyBlocked).toEqual([]);
     expect(wronglyAllowed).toEqual([]);
+    expect(neverReachedHandler).toEqual([]);
   });
 });

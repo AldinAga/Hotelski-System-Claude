@@ -138,8 +138,9 @@ isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_te
   `auto_close_time` u podešavanjima objekta (prazno: nema automatskog zatvaranja). Licenca koja bi odbila
   ručno zatvaranje isključuje i automatsko.
 - **Poslovni dan posle deploy-a 1b:** migracija `0009` otvara poslovni dan na dan migracije (današnji datum objekta). Prvo
-  zatvaranje dana prevodi stare `expected` boravke sa prošlim dolaskom u no-show, navodi ih u izveštaju i
-  skida ih sa kalendara. Zatvaranje je trajno, pa ga na stagingu (prave podatke Demo Hotela) pokreće samo
+  zatvaranje dana (tog dana migracije) prevodi u no-show svaki boravak u statusu `expected` sa dolaskom do tog
+  dana uključujući, i to samo kad je njegova rezervacija potvrđena; zato i gost koji je trebalo da stigne baš
+  na dan migracije, a nije prijavljen, postaje no-show. Navodi ih u izveštaju i skida ih sa kalendara. Zatvaranje je trajno, pa ga na stagingu (prave podatke Demo Hotela) pokreće samo
   korisnik; sesija implementera ga ne zatvara.
 - **`smoke-1b` (stiže sa Taskom 14, još ne postoji):** `HOTEL_SMOKE_PASSWORD=… node scripts/smoke-1b.mjs
   --api http://192.168.1.199:4200 --email <vlasnik> (--totp <6 cifara> | --totp-file ~/owner-totp.txt)

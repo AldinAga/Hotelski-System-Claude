@@ -4,7 +4,7 @@ import { Controller, Get } from '@nestjs/common';
 import { LicensedAction, type LicensedActionMeta } from '../src/licensing/licensed-action';
 import { SAFE_MODE_ALLOWED } from '../src/licensing/safe-mode';
 import { createTestApp, type TestApp } from './app';
-import { licensedActions } from './routes';
+import { ACTIONS_1B, licensedActions } from './routes';
 
 // The product manifest is the contract with the Central Admin Panel (spec
 // section 4). The oracle for its keys is the spec itself: the tables of
@@ -225,8 +225,6 @@ describe('product manifest', () => {
 
     // Phase 1b adds actions but no manifest module: they sit on hotel.core and
     // hotel.folio, both core, so no licence has to be reissued for them.
-    const ACTIONS_1B = /^(guest\.|stay\.check_|folio\.|business_day\.|settings\.|legal_profile\.|message\.)/;
-
     it('the actions added in 1b sit on hotel.core and hotel.folio and nowhere else', () => {
       const added = licensedActions(ta.app).filter((a) => ACTIONS_1B.test(a.action));
       // 1b has 28 routes; every one carries an annotation on its own handler.

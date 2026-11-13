@@ -3,6 +3,9 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { DiscoveryService, MetadataScanner } from '@nestjs/core';
 import { LICENSED_ACTION, UNLICENSED, type LicensedActionMeta } from '../src/licensing/licensed-action';
 
+/** The actions phase 1b added (the specs that pin 1b routes share this one pattern). */
+export const ACTIONS_1B = /^(guest\.|stay\.check_|folio\.|business_day\.|settings\.|legal_profile\.|message\.)/;
+
 export interface RouteInfo {
   route: string;
   /** HTTP method name, e.g. 'GET'. */

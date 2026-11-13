@@ -102,5 +102,5 @@ Faza 1b ne traži ništa od Admin Panela. Nove akcije (gosti, prijava i odjava, 
 profil, poruke) stoje na modulima `hotel.core` i `hotel.folio`, koji su oba već u manifestu kao core moduli
 (`product/manifest.json` ostaje `0.1.0`, nova verzija se ne objavljuje). Spec 4.1 vodi `hotel.folio` kao jezgro,
 pa plan iz koraka 4 ostaje kakav jeste. Da licenca staging instalacije zaista nosi `hotel.folio` vidi se na
-`GET /licence` (to proverava korak 3 skripte `smoke-1b`); ako ga ne nosi, to je zahtev za Admin Panel i upisuje
+`GET /licence` (to će proveravati korak 3 skripte `smoke-1b`, koja stiže sa Taskom 14); ako ga ne nosi, to je zahtev za Admin Panel i upisuje
 se ovde. Test `manifest.spec.ts` drži da nova akcija ne može da završi na modulu van `hotel.core` i `hotel.folio`.
