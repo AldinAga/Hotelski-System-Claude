@@ -1,17 +1,11 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import type { Pool } from 'pg';
 import { AppModule } from './app.module';
-import { SetupService } from './auth/setup.service';
 import { bootOrDegrade } from './boot';
 import { DomainErrorFilter } from './common/domain-error';
 import { configureHttp, HTTP_OPTIONS } from './http';
-import { PG_POOL } from './db/tokens';
-import { migrate } from './db/migrate';
-import { LicenceService } from './licensing/licence.service';
-import { NightAuditScheduler } from './business-day/night-audit.scheduler';
-import { OutboxDispatcher } from './mail/outbox.dispatcher';
+import { startServices } from './start-services';
 
 const port = Number(process.env.HOTEL_API_PORT ?? 4200);
 
@@ -26,15 +20,8 @@ async function bootstrap(): Promise<void> {
     configureHttp(app);
     app.useGlobalFilters(new DomainErrorFilter());
     app.enableShutdownHooks();
-    await migrate(app.get<Pool>(PG_POOL));
-    // Until the owner exists: a fresh setup token in the log at every boot.
-    await app.get(SetupService).prepareOnBoot();
-    // After migrations: loads the licence and starts heartbeat and key refresh.
-    await app.get(LicenceService).start();
-    // After the licence: the automatic night audit checks it at every tick. Stopped on shutdown (OnModuleDestroy).
-    app.get(NightAuditScheduler).start();
-    // The e-mail dispatcher: sends what bookIn and cancel queued. Stopped on shutdown (OnModuleDestroy).
-    app.get(OutboxDispatcher).start();
+    // Migrations, setup token, licence, then the background jobs (src/start-services.ts, tested).
+    await startServices(app);
     await app.listen(port);
   } catch (err) {
     // Stop timers and pools of the half-started app; the port stays free for
