@@ -78,12 +78,52 @@ export interface CalendarView {
 }
 
 export type ReservationStatus = 'requested' | 'confirmed' | 'cancelled' | 'no_show';
-export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled';
+export type StayStatus = 'expected' | 'in_house' | 'checked_out' | 'cancelled' | 'no_show';
 
 export interface PricedNight {
   day: string;
   priceMinor: number;
 }
+
+/** GET /guests and the guests of a stay (guests.service.ts). */
+export interface Guest {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string | null;
+  language: string;
+  note: string | null;
+}
+
+export type StayGuest = Guest & { isPrimary: boolean };
+
+/** GET /stays/:id/check-out-preview: what check-out would do now (stay-lifecycle.service.ts). */
+export interface CheckOutPreview {
+  businessDate: string;
+  keptUntil: string;
+  earlyDeparture: boolean;
+  nightsToPost: Array<{ night: string; priceMinor: number }>;
+  nightsToRelease: string[];
+  balanceMinor: number;
+}
+
+export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+
+/** GET /reservations/:id/messages (mail module). */
+export interface ReservationMessage {
+  id: string;
+  template: 'reservation_confirmed' | 'reservation_cancelled';
+  recipient: string | null;
+  status: OutboxStatus;
+  attempts: number;
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  sentAt: string | null;
+  history: Array<{ at: string; ok: boolean; error: string | null }>;
+}
+
+export type ReservationStay = Reservation['stays'][number];
 
 export interface Reservation {
   id: string;
@@ -108,6 +148,8 @@ export interface Reservation {
     status: StayStatus;
     nights: PricedNight[];
     totalMinor: number;
+    /** Primary guest first, then in the order they were added. */
+    guests: StayGuest[];
   }>;
   totalMinor: number;
 }
@@ -130,6 +172,7 @@ export const STAY_STATUS_LABELS: Record<StayStatus, string> = {
   in_house: 'U objektu',
   checked_out: 'Odjavljen',
   cancelled: 'Otkazan',
+  no_show: 'Nije došao',
 };
 
 export type Board = 'RO' | 'BB' | 'HB' | 'FB';
