@@ -269,7 +269,7 @@ export class DocumentsService {
       businessDate: p.businessDate,
     }));
 
-    const profile = await this.legal.get();
+    const profile = await this.legal.getIn(tx, propertyId); // on tx: a second pool connection could deadlock the pool
     const seller = {
       legalName: profile.legalName ?? null,
       taxId: profile.taxId ?? null,

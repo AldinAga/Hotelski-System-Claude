@@ -292,6 +292,18 @@ export class LegalProfileService {
   }
 
   /**
+   * The same read on the caller's transaction connection, for code that already
+   * holds one: `get()` would ask the pool for a second connection, and enough
+   * concurrent callers would each wait for a connection none of them can get.
+   * Takes the property id the caller already has (PropertyContext may hit the
+   * pool). Writes nothing and takes no row lock.
+   */
+  async getIn(tx: Tx, propertyId: string): Promise<LegalProfileView> {
+    const stored = await this.read(tx, propertyId, false);
+    return stored ? viewOf(stored) : emptyView();
+  }
+
+  /**
    * Upsert. Without a row, kind is required in the body and decides the
    * default fiscal compliance mode. With a row, kind may be repeated but not
    * changed (422 field kind): it decides what registryId means.
