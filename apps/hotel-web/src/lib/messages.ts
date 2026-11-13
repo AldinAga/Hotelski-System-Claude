@@ -1,5 +1,5 @@
 import { ApiError } from './api';
-import { formatDate } from './format';
+import { formatDate, formatRsd } from './format';
 
 /**
  * What the person at the desk reads for every error code the screens can
@@ -110,6 +110,29 @@ export const MESSAGES: Record<string, string> = {
   // folio documents (non-fiscal receipt, pro forma)
   document_empty: 'Folio nema nijednu stavku ni plaćanje, pa dokument ne može da se izda.',
   document_not_found: 'Dokument ne postoji. Osvežite stranicu.',
+
+  // check-in and check-out
+  check_in_wrong_day: 'Dolazak je {arrival}, a poslovni dan je {businessDate}. Zatvorite poslovni dan pre prijave gosta.',
+  // The same code when the arrival is already behind the business day (see messageFor).
+  check_in_wrong_day_past: 'Dolazak je bio {arrival}, a poslovni dan je {businessDate}. Prijava na dan dolaska više nije moguća.',
+  unit_required: 'Prvo dodelite jedinicu boravku.',
+  reservation_not_confirmed: 'Rezervacija nije potvrđena, pa se gost ne može prijaviti.',
+  stay_not_expected: 'Prijaviti se može samo gost čiji se dolazak očekuje. Osvežite prikaz.',
+  stay_not_in_house: 'Odjaviti se može samo gost koji je prijavljen. Osvežite prikaz.',
+  folio_balance_open: 'Saldo folija nije nula ({balanceMinor}). Naplatite ili vratite razliku pre odjave.',
+
+  // guests of a stay
+  guest_not_found: 'Gost ne postoji. Osvežite stranicu.',
+  guest_not_on_stay: 'Gost nije na ovom boravku. Osvežite stranicu.',
+  guest_already_on_stay: 'Gost je već na ovom boravku.',
+  too_many_guests: 'Na boravku može biti najviše {limit} gostiju (odrasli i deca zajedno).',
+  primary_guest_required: 'Nosilac boravka se ne može ukloniti. Prvo postavite drugog nosioca.',
+  stay_not_editable: 'Gosti se ne mogu menjati na boravku u ovom stanju.',
+
+  // reservation e-mails
+  message_not_found: 'Poruka ne postoji. Osvežite stranicu.',
+  message_already_sent: 'Poruka je već poslata.',
+  message_has_no_recipient: 'Gost nema e-adresu, pa poruka ne može da se pošalje.',
 };
 
 /** Field names in validation_failed details, as the forms label them. */
@@ -162,6 +185,15 @@ const FIELD_LABELS: Record<string, string> = {
   ratePlanId: 'Cenovnik',
   unitId: 'Jedinica',
   version: 'Verzija',
+  q: 'Pretraga',
+  guestId: 'Gost',
+  firstName: 'Ime',
+  lastName: 'Prezime',
+  phone: 'Telefon',
+  'guest.firstName': 'Ime',
+  'guest.lastName': 'Prezime',
+  'guest.email': 'E-adresa',
+  'guest.phone': 'Telefon',
 };
 
 /** "stays[0].adults" → "adults": the forms show one stay at a time. */
@@ -178,16 +210,29 @@ function fill(template: string, details: Record<string, unknown> | null): string
       return '';
     }
     if (key === 'field') return fieldLabel(String(v));
-    if (key === 'day' && typeof v === 'string') return formatDate(v);
+    if ((key === 'day' || key === 'arrival' || key === 'businessDate') && typeof v === 'string') return formatDate(v);
+    if (key === 'balanceMinor' && typeof v === 'number') return formatRsd(v);
     return String(v);
   });
   return missing ? null : out;
 }
 
+/**
+ * check_in_wrong_day means two things: the open business day is still behind
+ * the arrival (close it first), or it is already past it (nothing to close).
+ */
+function codeFor(err: ApiError): string {
+  if (err.code !== 'check_in_wrong_day') return err.code;
+  const { arrival, businessDate } = err.details ?? {};
+  return typeof arrival === 'string' && typeof businessDate === 'string' && arrival < businessDate
+    ? 'check_in_wrong_day_past'
+    : err.code;
+}
+
 /** The text to show for any error a screen caught. */
 export function messageFor(err: unknown): string {
   if (!(err instanceof ApiError)) return MESSAGES.unknown;
-  const template = MESSAGES[err.code];
+  const template = MESSAGES[codeFor(err)];
   if (template) {
     const text = fill(template, err.details);
     if (text !== null) return text;

@@ -12,7 +12,10 @@ import {
   type Unit,
   type UnitType,
 } from '@/lib/types';
-import { useReadOnly } from '@/lib/use-read-only';
+import { useLicenceMode } from '@/lib/use-read-only';
+import { ReservationMessages } from './reservation-messages';
+import { StayActions } from './stay-actions';
+import { StayGuests } from './stay-guests';
 
 const CANCELLABLE = new Set(['requested', 'confirmed']);
 /**
@@ -26,8 +29,10 @@ const MOVABLE_RESERVATION = new Set(['requested', 'confirmed']);
 
 /** One reservation with the real stay dates (the calendar shows them clipped to its range). */
 export function ReservationDetail({ id }: { id: string }) {
-  const readOnly = useReadOnly();
+  const licence = useLicenceMode();
+  const readOnly = licence !== 'full';
   const [r, setR] = useState<Reservation | null>(null);
+  const [businessDate, setBusinessDate] = useState<string | null>(null);
   const [names, setNames] = useState<{ types: Map<string, UnitType>; units: Map<string, Unit> }>({
     types: new Map(),
     units: new Map(),
@@ -38,12 +43,15 @@ export function ReservationDetail({ id }: { id: string }) {
   const [confirming, setConfirming] = useState(false);
 
   const load = useCallback(async () => {
-    const [res, types, units] = await Promise.all([
+    const [res, types, units, day] = await Promise.all([
       api<Reservation>(`/reservations/${id}`),
       api<UnitType[]>('/unit-types'),
       api<Unit[]>('/units'),
+      // Without the open day check-in is simply not offered; the page still works.
+      api<{ day: string }>('/business-day').then((b) => b.day, () => null),
     ]);
     setR(res);
+    setBusinessDate(day);
     setNames({ types: new Map(types.map((t) => [t.id, t])), units: new Map(units.map((u) => [u.id, u])) });
   }, [id]);
 
@@ -87,6 +95,12 @@ export function ReservationDetail({ id }: { id: string }) {
     }
   }
 
+  /** After check-in, check-out or a refusal that means this page is out of date: show the text, read it again. */
+  async function changed(text?: string) {
+    setNotice(text ?? null);
+    await load().catch((err: unknown) => setError(messageFor(err)));
+  }
+
   const canCancel =
     r !== null && CANCELLABLE.has(r.status) && !r.stays.some((s) => s.status === 'in_house' || s.status === 'checked_out');
 
@@ -95,7 +109,7 @@ export function ReservationDetail({ id }: { id: string }) {
       <p>
         <a href="/kalendar">‹ Kalendar</a>
       </p>
-      <h1>{r ? `Rezervacija ${r.number}` : 'Rezervacija'}</h1>
+      <h1 tabIndex={-1}>{r ? `Rezervacija ${r.number}` : 'Rezervacija'}</h1>
       {error && (
         <p role="alert" className="error">
           {error}
@@ -154,6 +168,14 @@ export function ReservationDetail({ id }: { id: string }) {
                       onMove={(unitId) => void moveStay(s.id, unitId, s.unitId !== null)}
                     />
                   )}
+                  <StayActions
+                    stay={s}
+                    reservation={r}
+                    businessDate={businessDate}
+                    licence={licence}
+                    onChanged={changed}
+                  />
+                  <StayGuests stay={s} readOnly={readOnly} />
                 </li>
               );
             })}
@@ -161,6 +183,8 @@ export function ReservationDetail({ id }: { id: string }) {
           <p>
             <strong>{`Ukupno: ${formatRsd(r.totalMinor)}`}</strong>
           </p>
+
+          <ReservationMessages reservationId={r.id} readOnly={readOnly} />
 
           {canCancel && (
             <div className="card stack">
