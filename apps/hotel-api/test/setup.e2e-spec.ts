@@ -217,6 +217,13 @@ describe('first-run setup (e2e)', () => {
       expect(rows).toEqual([{ kind: 'natural_person', fiscal_compliance_mode: 'disabled' }]);
     });
 
+    it('repeating the owner step with another legal kind moves the fiscal compliance mode with it', async () => {
+      expect((await ownerStep({ legalKind: 'legal_entity' })).status).toBe(201);
+      expect((await ownerStep({ legalKind: 'natural_person' })).status).toBe(201);
+      const { rows } = await ta.testDb.pool.query('SELECT kind, fiscal_compliance_mode FROM legal_profile');
+      expect(rows).toEqual([{ kind: 'natural_person', fiscal_compliance_mode: 'disabled' }]);
+    });
+
     it('repeating the owner step returns a new URI and creates nothing twice', async () => {
       const first = await ownerStep();
       expect(first.status).toBe(201);
