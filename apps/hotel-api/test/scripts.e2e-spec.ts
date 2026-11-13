@@ -661,6 +661,19 @@ describe('scripts/smoke-1b.mjs (e2e)', () => {
       expect(out.stdout).toMatch(/^FAIL receipt: dueMinor je 100 \(očekivano 0\)$/m);
     }, LONG);
 
+    it('a document without the "not a fiscal receipt" notice fails the receipt step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_document() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.content := jsonb_set(NEW.content, '{notice}', '"Fiskalni račun"');
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_document BEFORE INSERT ON folio_document FOR EACH ROW EXECUTE FUNCTION t14_on_document()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL receipt: dokument nema oznaku "Ovo nije fiskalni račun\."$/m);
+    }, LONG);
+
     it('a second accommodation line fails the "exactly one night" check', async () => {
       await trigger(`
         CREATE FUNCTION t14_on_close() RETURNS trigger LANGUAGE plpgsql AS $$
