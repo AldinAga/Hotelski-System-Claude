@@ -144,7 +144,7 @@ export class DocumentsService {
     try {
       return await this.db.transaction(async (tx) => {
         const businessDate = await this.days.lockOpen(tx, propertyId, 'share');
-        await this.stay(tx, propertyId, stayId);
+        // An unknown stay is 404 from ensureFolio below; the counter row it may have made rolls back.
         const year = Number(businessDate.slice(0, 4));
         // Lock order point 5, before the folio (6): the counter row, locked but not raised yet.
         await tx.execute(sql`

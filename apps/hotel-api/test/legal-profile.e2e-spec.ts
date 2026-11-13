@@ -1,3 +1,4 @@
+import { LegalProfileService } from '../src/legal/legal-profile.service';
 import { startFrontDesk, type FrontDesk } from './front-desk';
 
 const PIB = '100002887'; // a real company's PIB (see legal-ids.spec.ts)
@@ -19,7 +20,7 @@ describe('legal profile (e2e)', () => {
   /** The row setup leaves (phase 1a fields only), for the property the harness made. */
   const seedProfile = async (kind: 'legal_entity' | 'entrepreneur' | 'natural_person', fields: { taxId?: string; registryId?: string } = {}) => {
     await fd.sql(
-      `INSERT INTO legal_profile (property_id, kind, tax_id, registry_id, fiscal_mode)
+      `INSERT INTO legal_profile (property_id, kind, tax_id, registry_id, fiscal_compliance_mode)
        SELECT id, $1, $2, $3, CASE $1 WHEN 'natural_person' THEN 'disabled' ELSE 'required' END FROM property`,
       [kind, fields.taxId ?? null, fields.registryId ?? null],
     );
@@ -89,7 +90,7 @@ describe('legal profile (e2e)', () => {
       activityCode: '5510',
       bankAccount: '160-0000000123456-78',
       accommodationCategory: 'hotel',
-      fiscalMode: 'required',
+      fiscalComplianceMode: 'required',
       complete: true,
       missing: [],
     });
@@ -119,7 +120,7 @@ describe('legal profile (e2e)', () => {
       ['bankAccount', '160-00000001234567-78'],
       ['email', 'not-an-address'],
       ['accommodationCategory', 'castle'],
-      ['fiscalMode', 'maybe'],
+      ['fiscalComplianceMode', 'maybe'],
       ['vatPayer', 'yes'],
     ] as const) {
       const res = await put({ ...entityBody, [field]: value });
@@ -187,13 +188,13 @@ describe('legal profile (e2e)', () => {
     expect(res.body.details).toEqual({ field: 'registryId' });
   });
 
-  it('fiscalMode required gives fiscalNotice not_available_yet; the other modes give none', async () => {
+  it('fiscalComplianceMode required gives fiscalNotice not_available_yet; the other modes give none', async () => {
     await seedProfile('legal_entity', { taxId: PIB, registryId: MB });
     const required = await fd.get('/legal-profile', fd.manager);
-    expect(required.body).toMatchObject({ fiscalMode: 'required', fiscalNotice: 'not_available_yet' });
-    expect((await put({ fiscalMode: 'invoice_only' })).body).toMatchObject({ fiscalMode: 'invoice_only', fiscalNotice: null });
-    expect((await put({ fiscalMode: 'disabled' })).body).toMatchObject({ fiscalMode: 'disabled', fiscalNotice: null });
-    expect((await put({ fiscalMode: 'required' })).body.fiscalNotice).toBe('not_available_yet');
+    expect(required.body).toMatchObject({ fiscalComplianceMode: 'required', fiscalNotice: 'not_available_yet' });
+    expect((await put({ fiscalComplianceMode: 'invoice_only' })).body).toMatchObject({ fiscalComplianceMode: 'invoice_only', fiscalNotice: null });
+    expect((await put({ fiscalComplianceMode: 'disabled' })).body).toMatchObject({ fiscalComplianceMode: 'disabled', fiscalNotice: null });
+    expect((await put({ fiscalComplianceMode: 'required' })).body.fiscalNotice).toBe('not_available_yet');
   });
 
   it('missing names the empty fields an invoice needs, and complete turns true when none is left', async () => {
@@ -220,10 +221,107 @@ describe('legal profile (e2e)', () => {
     expect(await fd.sql(`SELECT 1 FROM audit_log WHERE action = 'legal_profile.update'`)).toHaveLength(0);
   });
 
-  it('without a legal profile row GET answers 409 legal_profile_missing', async () => {
-    const res = await fd.get('/legal-profile', fd.manager);
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('legal_profile_missing');
+  describe('before the profile exists (only the property row, as the test database has it)', () => {
+    const rows = () => fd.sql(`SELECT 1 FROM legal_profile`);
+    const audits = () => fd.sql(`SELECT 1 FROM audit_log WHERE action = 'legal_profile.update'`);
+
+    it('GET answers kind null, every field null, complete false, and writes nothing', async () => {
+      const res = await fd.get('/legal-profile', fd.manager);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        kind: null,
+        legalName: null,
+        taxId: null,
+        registryId: null,
+        vatPayer: false,
+        address: null,
+        postalCode: null,
+        city: null,
+        activityCode: null,
+        bankAccount: null,
+        email: null,
+        phone: null,
+        accommodationCategory: null,
+        categorizationNumber: null,
+        fiscalComplianceMode: null,
+        fiscalNotice: null,
+        complete: false,
+        missing: ['legalName', 'address', 'city', 'taxId', 'registryId'],
+      });
+      expect(await rows()).toHaveLength(0);
+      expect(await audits()).toHaveLength(0);
+    });
+
+    it('LegalProfileService.get() does not throw for a missing row', async () => {
+      const view = await fd.app.get(LegalProfileService).get();
+      expect(view).toMatchObject({ kind: null, complete: false });
+    });
+
+    it('PUT without kind is 422 with field kind and creates nothing', async () => {
+      const res = await put(entityBody);
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ code: 'validation_failed', details: { field: 'kind' } });
+      expect(await rows()).toHaveLength(0);
+    });
+
+    it('PUT with an unknown kind is 422 with field kind', async () => {
+      const res = await put({ ...entityBody, kind: 'corporation' });
+      expect(res.status).toBe(422);
+      expect(res.body.details).toEqual({ field: 'kind' });
+      expect(await rows()).toHaveLength(0);
+    });
+
+    it('PUT with kind creates the row: legal entity defaults to required, audit before is null', async () => {
+      const res = await put({ ...entityBody, kind: 'legal_entity' });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ kind: 'legal_entity', taxId: PIB, fiscalComplianceMode: 'required', fiscalNotice: 'not_available_yet', complete: true });
+      expect(await stored()).toMatchObject({ kind: 'legal_entity', tax_id: PIB, registry_id: MB, fiscal_compliance_mode: 'required' });
+      const audit = await fd.sql<{ before: unknown; after: { kind: string } }>(
+        `SELECT before, after FROM audit_log WHERE action = 'legal_profile.update'`,
+      );
+      expect(audit).toHaveLength(1);
+      expect(audit[0].before).toBeNull();
+      expect(audit[0].after.kind).toBe('legal_entity');
+      expect((await fd.get('/legal-profile', fd.manager)).body).toEqual(res.body);
+    });
+
+    it('PUT creates a natural person with fiscalisation disabled and the JMBG masked', async () => {
+      const res = await put({ kind: 'natural_person', registryId: JMBG });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ kind: 'natural_person', registryId: MASKED_JMBG, fiscalComplianceMode: 'disabled', fiscalNotice: null });
+    });
+
+    it('a PUT that fails validation does not leave a row behind', async () => {
+      const res = await put({ ...entityBody, kind: 'legal_entity', taxId: '100002888' });
+      expect(res.status).toBe(422);
+      expect(res.body.details).toEqual({ field: 'taxId' });
+      expect(await rows()).toHaveLength(0);
+      expect(await audits()).toHaveLength(0);
+    });
+  });
+
+  it('on an existing row PUT may repeat the kind but not change it', async () => {
+    await seedProfile('legal_entity', { taxId: PIB, registryId: MB });
+    const same = await put({ kind: 'legal_entity', city: 'Niš' });
+    expect(same.status).toBe(200);
+    expect(same.body.city).toBe('Niš');
+    const other = await put({ kind: 'natural_person', city: 'Kraljevo' });
+    expect(other.status).toBe(422);
+    expect(other.body.details).toEqual({ field: 'kind' });
+    expect(await stored()).toMatchObject({ kind: 'legal_entity', city: 'Niš' });
+    const bad = await put({ kind: 'corporation' });
+    expect(bad.status).toBe(422);
+    expect(bad.body.details).toEqual({ field: 'kind' });
+  });
+
+  it('PIB and JMBG of the wrong length are refused with their own message', async () => {
+    await seedProfile('legal_entity');
+    const pib = await put({ ...entityBody, taxId: '10000288' });
+    expect(pib.body).toMatchObject({ details: { field: 'taxId' }, message: 'PIB nije ispravan: mora imati tačno 9 cifara.' });
+    await fd.sql(`TRUNCATE legal_profile`);
+    await seedProfile('natural_person');
+    const jmbg = await put({ registryId: '010199071000' });
+    expect(jmbg.body).toMatchObject({ details: { field: 'registryId' }, message: 'JMBG nije ispravan: mora imati tačno 13 cifara.' });
   });
 
   it('the receptionist and housekeeping get 403 forbidden_role on GET and PUT; owner and manager read', async () => {

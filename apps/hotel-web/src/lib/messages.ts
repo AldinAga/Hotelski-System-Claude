@@ -23,7 +23,6 @@ export const MESSAGES: Record<string, string> = {
   licensing_not_configured: 'Licenciranje na serveru nije podešeno. Obratite se podršci.',
   central_admin_unavailable: 'Centralni admin trenutno nije dostupan. Aktivacioni kod je verovatno još važeći; pokušajte ponovo.',
   property_missing: 'Objekat još nije podešen. Završite prvo podešavanje.',
-  legal_profile_missing: 'Pravni profil objekta još nije podešen.',
 
   // sign-in and roles
   invalid_credentials: 'Neispravna e-adresa ili lozinka.',
@@ -182,7 +181,8 @@ const FIELD_LABELS: Record<string, string> = {
   phone: 'Telefon',
   accommodationCategory: 'Vrsta smeštaja',
   categorizationNumber: 'Broj rešenja o kategorizaciji',
-  fiscalMode: 'Fiskalizacija',
+  kind: 'Pravni oblik',
+  fiscalComplianceMode: 'Fiskalizacija',
   source: 'Izvor',
   channel: 'Kanal',
   'holder.firstName': 'Ime',

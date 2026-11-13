@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -822,5 +823,41 @@ describe('FolioView: documents', () => {
     expect(screen.getByRole('button', { name: 'Nefiskalni račun' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Predračun' })).toBeDisabled();
     expect(postsTo(calls, ISSUE)).toHaveLength(1);
+  });
+});
+
+describe('FolioView: overlapping reads', () => {
+  it('a failure of an older read does not show an error once a newer read has answered', async () => {
+    // StrictMode runs the load effect twice: read 1 fails late, read 2 succeeds at once.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let reads = 0;
+    mockFetch(
+      routes({
+        extra: {
+          [`GET /api/stays/${STAY}/folio`]: async () => {
+            reads += 1;
+            if (reads === 1) {
+              await gate;
+              return { status: 404, body: { code: 'stay_not_found', message: 'x', details: null } };
+            }
+            return { body: FOLIO };
+          },
+        },
+      }),
+    );
+    render(
+      <StrictMode>
+        <FolioView stayId={STAY} />
+      </StrictMode>,
+    );
+    await screen.findByText('Ukupno');
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('Ukupno')).toBeInTheDocument();
   });
 });

@@ -84,8 +84,7 @@ export function FolioView({ stayId }: { stayId: string }) {
   const receiptKey = useIdempotencyKey();
   const proformaKey = useIdempotencyKey();
 
-  const load = useCallback(async () => {
-    const seq = ++latest.current;
+  const read = useCallback(async (seq: number) => {
     const [f, d] = await Promise.all([
       api<Folio>(`/stays/${stayId}/folio`),
       api<FolioDocumentItem[]>(`/stays/${stayId}/folio/documents`).catch(() => null),
@@ -104,6 +103,16 @@ export function FolioView({ stayId }: { stayId: string }) {
       setHeader({ reservation, stay, unit });
     }
   }, [stayId]);
+
+  const load = useCallback(async () => {
+    const seq = ++latest.current;
+    try {
+      await read(seq);
+    } catch (err) {
+      // A newer read has started: its answer counts, this failure is old news.
+      if (seq === latest.current) throw err;
+    }
+  }, [read]);
 
   const refresh = useCallback(
     () => load().catch((err: unknown) => setError(messageFor(err))),

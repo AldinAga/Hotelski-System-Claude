@@ -46,7 +46,7 @@ export const legalProfile = pgTable('legal_profile', {
   phone: text('phone'),
   accommodationCategory: text('accommodation_category'),
   categorizationNumber: text('categorization_number'),
-  fiscalMode: text('fiscal_mode', { enum: ['required', 'invoice_only', 'disabled'] }).notNull().default('disabled'),
+  fiscalComplianceMode: text('fiscal_compliance_mode', { enum: ['required', 'invoice_only', 'disabled'] }).notNull().default('disabled'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

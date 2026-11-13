@@ -192,9 +192,9 @@ describe('first-run setup (e2e)', () => {
       expect(secretOf(res.body.totpUri)).toMatch(/^[A-Z2-7]{32}$/);
 
       const { rows: props } = await ta.testDb.pool.query(
-        'SELECT p.name, l.kind, l.fiscal_mode FROM property p JOIN legal_profile l ON l.property_id = p.id',
+        'SELECT p.name, l.kind, l.fiscal_compliance_mode FROM property p JOIN legal_profile l ON l.property_id = p.id',
       );
-      expect(props).toEqual([{ name: 'Hotel Tara', kind: 'legal_entity', fiscal_mode: 'required' }]);
+      expect(props).toEqual([{ name: 'Hotel Tara', kind: 'legal_entity', fiscal_compliance_mode: 'required' }]);
       const { rows: users } = await ta.testDb.pool.query('SELECT email, name, role, active, totp_state FROM app_user');
       expect(users).toEqual([{ email: owner.email, name: 'Vlasnik', role: 'owner', active: true, totp_state: 'setup' }]);
 
@@ -213,8 +213,15 @@ describe('first-run setup (e2e)', () => {
 
     it('a natural person starts with fiscalisation disabled', async () => {
       expect((await ownerStep({ legalKind: 'natural_person' })).status).toBe(201);
-      const { rows } = await ta.testDb.pool.query('SELECT kind, fiscal_mode FROM legal_profile');
-      expect(rows).toEqual([{ kind: 'natural_person', fiscal_mode: 'disabled' }]);
+      const { rows } = await ta.testDb.pool.query('SELECT kind, fiscal_compliance_mode FROM legal_profile');
+      expect(rows).toEqual([{ kind: 'natural_person', fiscal_compliance_mode: 'disabled' }]);
+    });
+
+    it('repeating the owner step with another legal kind moves the fiscal compliance mode with it', async () => {
+      expect((await ownerStep({ legalKind: 'legal_entity' })).status).toBe(201);
+      expect((await ownerStep({ legalKind: 'natural_person' })).status).toBe(201);
+      const { rows } = await ta.testDb.pool.query('SELECT kind, fiscal_compliance_mode FROM legal_profile');
+      expect(rows).toEqual([{ kind: 'natural_person', fiscal_compliance_mode: 'disabled' }]);
     });
 
     it('repeating the owner step returns a new URI and creates nothing twice', async () => {

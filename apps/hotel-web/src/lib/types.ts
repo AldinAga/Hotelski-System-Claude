@@ -230,7 +230,7 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
   proforma: 'Predračun',
 };
 
-export type OutboxStatus ='pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
 
 /** GET /reservations/:id/messages (mail module). */
 export interface ReservationMessage {
