@@ -22,11 +22,12 @@ describe('OutboxDispatcher timer', () => {
     const run = jest.spyOn(d, 'runOnce').mockResolvedValue(NONE);
     d.start();
     d.start();
-    await jest.advanceTimersByTimeAsync(TICK_MS - 1);
+    expect(TICK_MS).toBe(15_000);
+    await jest.advanceTimersByTimeAsync(14_999);
     expect(run).toHaveBeenCalledTimes(0);
     await jest.advanceTimersByTimeAsync(1);
     expect(run).toHaveBeenCalledTimes(1);
-    await jest.advanceTimersByTimeAsync(TICK_MS);
+    await jest.advanceTimersByTimeAsync(15_000);
     expect(run).toHaveBeenCalledTimes(2);
   });
 

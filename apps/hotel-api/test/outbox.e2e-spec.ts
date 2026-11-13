@@ -540,6 +540,9 @@ describe('outbox without SMTP settings (e2e)', () => {
 });
 
 describe('mail configuration', () => {
+  // What nodemailer was given: Mailer keeps the options of createTransport.
+  const optionsOf = (t: unknown) =>
+    (t as { transporter: { options: Record<string, unknown> } }).transporter.options as Record<string, unknown> & { auth?: unknown };
   const secrets = { SMTP_HOST: 'smtp.private.example', SMTP_USER: 'robot-user', SMTP_PASSWORD: 'p4ssw0rd-secret', MAIL_FROM: 'Hotel <hotel@private.example>' };
 
   it('without SMTP_HOST: Noop and one log line that names the variable, not a value', () => {
@@ -576,6 +579,14 @@ describe('mail configuration', () => {
     expect(transport).toBeInstanceOf(SmtpMailTransport);
     expect(transport.configured).toBe(true);
     expect(lines).toEqual([]);
+    expect(optionsOf(transport)).toMatchObject({ host: 'smtp.private.example', port: 587, secure: false, connectionTimeout: 20_000, greetingTimeout: 20_000, socketTimeout: 20_000 });
+    expect(optionsOf(transport).auth).toEqual({ user: 'robot-user', pass: 'p4ssw0rd-secret' });
+  });
+
+  it('SMTP_PORT, SMTP_SECURE=true and a missing user are passed on as set', () => {
+    const transport = createMailTransport({ SMTP_HOST: 'h.example', MAIL_FROM: 'a@b.example', SMTP_PORT: '465', SMTP_SECURE: 'TRUE' }, () => undefined);
+    expect(optionsOf(transport)).toMatchObject({ host: 'h.example', port: 465, secure: true });
+    expect(optionsOf(transport).auth).toBeUndefined();
   });
 });
 
