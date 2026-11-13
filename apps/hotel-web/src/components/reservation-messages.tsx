@@ -19,7 +19,8 @@ function statusText(m: ReservationMessage): string {
     case 'sending':
       return 'Čeka slanje';
     case 'skipped':
-      return 'Gost nema e-adresu';
+      // Without an address: no one to write to. With one: the confirmation was closed because the reservation was cancelled.
+      return m.recipient === null ? 'Gost nema e-adresu' : (m.lastError ?? 'Poruka nije poslata');
     case 'failed':
       return m.lastError ? `Nije poslato: ${m.lastError}` : 'Nije poslato';
   }

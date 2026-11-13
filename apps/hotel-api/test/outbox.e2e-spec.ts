@@ -52,6 +52,8 @@ describe('outbox: reservation e-mails (e2e)', () => {
   };
   const count = async (table: string) => (await fd.sql<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`))[0].n;
 
+  const cancel = (b: { reservationId: string; version: number }) =>
+    fd.post(`/reservations/${b.reservationId}/cancel`, { version: b.version });
   const resendAudits = async () =>
     (await fd.sql<{ n: number }>(`SELECT count(*)::int AS n FROM audit_log WHERE action = 'message.resend'`))[0].n;
 
@@ -177,23 +179,152 @@ describe('outbox: reservation e-mails (e2e)', () => {
     expect((await only()).attempts).toBe(0);
   });
 
-  it('cancelling adds a cancellation message; both go out with their own titles', async () => {
+  it('cancelling adds a cancellation message; a confirmation that already went out is untouched; both have their own titles', async () => {
     const b = await book();
-    expect((await fd.post(`/reservations/${b.reservationId}/cancel`, { version: b.version })).status).toBe(200);
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 1, failed: 0, retried: 0 });
+    const sentBefore = (await only()).sent;
+    expect((await cancel(b)).status).toBe(200);
     const r = await rows();
-    expect(r.map((x) => [x.template, x.status, x.recipient]).sort()).toEqual([
-      ['reservation_cancelled', 'pending', 'petar@example.com'],
-      ['reservation_confirmed', 'pending', 'petar@example.com'],
+    expect(r.map((x) => [x.template, x.status, x.recipient, x.last_error]).sort()).toEqual([
+      ['reservation_cancelled', 'pending', 'petar@example.com', null],
+      ['reservation_confirmed', 'sent', 'petar@example.com', null],
     ]);
+    expect(iso(r.find((x) => x.template === 'reservation_confirmed')!.sent)).toBe(iso(sentBefore));
     const [cancelled] = await fd.sql<{ key: string }>(
       `SELECT idempotency_key AS key FROM outbox_message WHERE template = 'reservation_cancelled'`,
     );
     expect(cancelled.key).toBe(`reservation_cancelled:${b.reservationId}`);
-    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 2, failed: 0, retried: 0 });
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 1, failed: 0, retried: 0 });
     expect(fd.mail.sent.map((m) => m.subject.split(' — ')[0].replace(/ R-.*/, '')).sort()).toEqual([
       'Otkazana rezervacija',
       'Potvrda rezervacije',
     ]);
+  });
+
+  // ---- a confirmation that has not gone out is closed by the cancellation (Ruling 40) ----
+
+  const closed = (r: Row[]) => r.map((x) => [x.template, x.status, x.last_error]).sort();
+  const CANCELLED_REASON = 'Rezervacija je otkazana, pa potvrda nije poslata.';
+  const titles = () => fd.mail.sent.map((m) => m.subject.split(' — ')[0].replace(/ R-.*/, ''));
+
+  it('SMTP down at the booking, then a cancellation: only the cancellation is ever sent, however long the dispatcher runs', async () => {
+    const b = await book();
+    fd.mail.failNext(new MailError('smtp_down', 'Server ne odgovara.', false));
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 0, failed: 0, retried: 1 }); // the confirmation backs off
+    expect((await cancel(b)).status).toBe(200);
+    expect(closed(await rows())).toEqual([
+      ['reservation_cancelled', 'pending', null],
+      ['reservation_confirmed', 'skipped', CANCELLED_REASON],
+    ]);
+    let now = NOW;
+    for (const minutes of [1, 5, 30, 120, 360]) {
+      now = new Date(now.getTime() + minutes * MINUTE);
+      fd.setNow(now);
+      await fd.dispatcher.runOnce();
+    }
+    expect(titles()).toEqual(['Otkazana rezervacija']);
+    const confirmation = (await rows()).find((x) => x.template === 'reservation_confirmed')!;
+    expect(confirmation).toMatchObject({ status: 'skipped', attempts: 1, lease: null, recipient: 'petar@example.com' });
+    const view = await fd.get(`/reservations/${b.reservationId}/messages`);
+    expect(
+      view.body.map((m: { template: string; status: string; lastError: string | null }) => [m.template, m.status, m.lastError]).sort(),
+    ).toEqual([
+      ['reservation_cancelled', 'sent', null],
+      ['reservation_confirmed', 'skipped', CANCELLED_REASON],
+    ]);
+  });
+
+  it('a confirmation that failed for good is closed by the cancellation too', async () => {
+    const b = await book();
+    fd.mail.failNext(new MailError('smtp_550', 'SMTP server je odbio poruku (odgovor 550).', true));
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 0, failed: 1, retried: 0 });
+    expect((await cancel(b)).status).toBe(200);
+    expect(closed(await rows())).toEqual([
+      ['reservation_cancelled', 'pending', null],
+      ['reservation_confirmed', 'skipped', CANCELLED_REASON],
+    ]);
+  });
+
+  it('a cancellation closes only the confirmations of its own reservation', async () => {
+    const a = await book('2026-11-05', '2026-11-06');
+    await book('2026-11-08', '2026-11-09');
+    expect((await cancel(a)).status).toBe(200);
+    const confirmations = await fd.sql<{ status: string; reservation_id: string }>(
+      `SELECT status, reservation_id FROM outbox_message WHERE template = 'reservation_confirmed'`,
+    );
+    expect(confirmations.map((x) => [x.reservation_id === a.reservationId, x.status]).sort()).toEqual([
+      [false, 'pending'],
+      [true, 'skipped'],
+    ]);
+  });
+
+  it('a confirmation being sent while the reservation is cancelled is left alone', async () => {
+    const b = await book();
+    const hold = fd.mail.holdNext();
+    const run = fd.dispatcher.runOnce();
+    try {
+      await Promise.race([hold.entered, delay(5_000).then(() => Promise.reject(new Error('the send never started')))]);
+      expect((await cancel(b)).status).toBe(200);
+      expect(closed(await rows())).toEqual([
+        ['reservation_cancelled', 'pending', null],
+        ['reservation_confirmed', 'sending', null],
+      ]);
+    } finally {
+      hold.release();
+    }
+    expect(await run).toEqual({ sent: 1, failed: 0, retried: 0 });
+    expect(closed(await rows())).toEqual([
+      ['reservation_cancelled', 'pending', null],
+      ['reservation_confirmed', 'sent', null],
+    ]);
+  });
+
+  it('resend of a closed confirmation is 409 message_reservation_cancelled and queues nothing', async () => {
+    const b = await book();
+    fd.mail.failNext(new MailError('smtp_550', 'SMTP server je odbio poruku (odgovor 550).', true));
+    await fd.dispatcher.runOnce();
+    await cancel(b);
+    const confirmation = (await rows()).find((x) => x.template === 'reservation_confirmed')!;
+    const res = await fd.post(`/messages/${confirmation.id}/resend`);
+    expect([res.status, res.body.code]).toEqual([409, 'message_reservation_cancelled']);
+    expect(closed(await rows())).toEqual([
+      ['reservation_cancelled', 'pending', null],
+      ['reservation_confirmed', 'skipped', CANCELLED_REASON],
+    ]);
+    expect(await resendAudits()).toBe(0);
+  });
+
+  it('resend of a confirmation of a cancelled reservation is refused even when the cancellation did not close it', async () => {
+    // The confirmation was being sent when the reservation was cancelled, failed meanwhile and waits for its retry.
+    const b = await book();
+    fd.mail.failNext(new MailError('smtp_down', 'Server ne odgovara.', false));
+    const hold = fd.mail.holdNext();
+    const run = fd.dispatcher.runOnce();
+    try {
+      await Promise.race([hold.entered, delay(5_000).then(() => Promise.reject(new Error('the send never started')))]);
+      expect((await cancel(b)).status).toBe(200);
+    } finally {
+      hold.release();
+    }
+    expect(await run).toEqual({ sent: 0, failed: 0, retried: 1 });
+    const confirmation = (await rows()).find((x) => x.template === 'reservation_confirmed')!;
+    expect(confirmation.status).toBe('pending');
+    const res = await fd.post(`/messages/${confirmation.id}/resend`);
+    expect([res.status, res.body.code]).toEqual([409, 'message_reservation_cancelled']);
+    expect(await resendAudits()).toBe(0);
+  });
+
+  it('resend of a failed cancellation still works (the refusal is for confirmations only)', async () => {
+    const b = await book();
+    await fd.dispatcher.runOnce();
+    await cancel(b);
+    fd.mail.failNext(new MailError('smtp_550', 'SMTP server je odbio poruku (odgovor 550).', true));
+    await fd.dispatcher.runOnce();
+    const failed = (await rows()).find((x) => x.template === 'reservation_cancelled')!;
+    expect(failed.status).toBe('failed');
+    const res = await fd.post(`/messages/${failed.id}/resend`);
+    expect([res.status, res.body.status]).toEqual([200, 'pending']);
+    expect(await fd.dispatcher.runOnce()).toEqual({ sent: 1, failed: 0, retried: 0 });
   });
 
   // ---- sending ----
@@ -312,7 +443,7 @@ describe('outbox: reservation e-mails (e2e)', () => {
     expect((await only()).status).toBe('sent');
   });
 
-  it('two dispatchers at once: the message is sent exactly once', async () => {
+  it('two dispatchers started together send the message once (a smoke test: the held-open tests above carry the race)', async () => {
     await book();
     const other = fd.newDispatcher();
     const [a, b] = await Promise.all([fd.dispatcher.runOnce(), other.runOnce()]);
@@ -363,6 +494,32 @@ describe('outbox: reservation e-mails (e2e)', () => {
     await run;
   });
 
+  // A dispatcher whose lease ran out while it was sending: the other run that took the message over finishes first,
+  // and the late result must neither count again nor write over the final state (each result write is guarded).
+  it.each([
+    ['success', null],
+    ['permanent failure', new MailError('smtp_550', 'SMTP server je odbio poruku (odgovor 550).', true)],
+    ['temporary failure', new MailError('smtp_down', 'Server ne odgovara.', false)],
+  ])('a late %s of a run whose lease ran out is dropped: not counted, no attempt row, state untouched', async (_name, lateError) => {
+    await book();
+    const other = fd.newDispatcher();
+    const hold = fd.mail.holdNext();
+    const slow = fd.dispatcher.runOnce();
+    let lateResult;
+    try {
+      await Promise.race([hold.entered, delay(5_000).then(() => Promise.reject(new Error('the first send never started')))]);
+      fd.setNow(at(6)); // the lease of the claim at NOW ended at NOW + 5 minutes
+      expect(await other.runOnce()).toEqual({ sent: 1, failed: 0, retried: 0 });
+      if (lateError) fd.mail.failNext(lateError); // after the other run's send, which would have taken it
+    } finally {
+      hold.release();
+      lateResult = await slow;
+    }
+    expect(lateResult).toEqual(NONE);
+    expect(await only()).toMatchObject({ status: 'sent', attempts: 1, last_error: null, lease: null });
+    expect(await fd.sql(`SELECT ok FROM outbox_attempt`)).toEqual([{ ok: true }]);
+  });
+
   // ---- reading and resending ----
 
   it('GET /reservations/:id/messages lists the messages with their attempts and writes nothing', async () => {
@@ -404,6 +561,68 @@ describe('outbox: reservation e-mails (e2e)', () => {
     expect([unknown.status, unknown.body.code]).toEqual([404, 'reservation_not_found']);
     const malformed = await fd.get('/reservations/not-a-uuid/messages');
     expect([malformed.status, malformed.body.code]).toEqual([404, 'reservation_not_found']);
+  });
+
+  it('GET messages: two messages of one reservation each show only their own attempts', async () => {
+    const b = await book();
+    fd.mail.failNext(new MailError('smtp_a', 'Prva greška.', false));
+    await fd.dispatcher.runOnce();
+    fd.setNow(at(2));
+    await fd.dispatcher.runOnce(); // the confirmation is sent on its second attempt
+    expect((await cancel(b)).status).toBe(200);
+    fd.mail.failNext(new MailError('smtp_b', 'Druga greška.', false));
+    await fd.dispatcher.runOnce();
+    fd.setNow(at(4));
+    await fd.dispatcher.runOnce(); // the cancellation is sent on its second attempt
+    const res = await fd.get(`/reservations/${b.reservationId}/messages`);
+    expect(res.status).toBe(200);
+    expect(
+      res.body.map((m: { template: string; status: string; history: Array<{ ok: boolean; error: string | null }> }) => [
+        m.template,
+        m.status,
+        m.history.map((h) => [h.ok, h.error]),
+      ]),
+    ).toEqual([
+      ['reservation_confirmed', 'sent', [[false, 'Prva greška.'], [true, null]]],
+      ['reservation_cancelled', 'sent', [[false, 'Druga greška.'], [true, null]]],
+    ]);
+  });
+
+  it('a resend that meets a claim in flight waits for it and leaves the message alone (row lock)', async () => {
+    await book();
+    const m = await only();
+    const claimer = await fd.ta.testDb.pool.connect();
+    let open = false;
+    let resend: Promise<{ status: number; body: { status?: string } }> | undefined;
+    try {
+      await claimer.query('BEGIN');
+      open = true;
+      // What the dispatcher's claim does, held open: the message is 'sending' but not yet committed.
+      await claimer.query(`UPDATE outbox_message SET status = 'sending', lease_until = $1 WHERE id = $2`, [at(5), m.id]);
+      resend = fd.post(`/messages/${m.id}/resend`).then((r) => r);
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [w] = await fd.sql<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+        );
+        if (w.n > 0) break;
+        if (Date.now() > deadline) throw new Error('the resend never waited for the claim');
+        await delay(25);
+      }
+      await claimer.query('COMMIT');
+      open = false;
+    } finally {
+      if (open) await claimer.query('ROLLBACK');
+      claimer.release();
+    }
+    const res = await Promise.race([resend, delay(5_000).then(() => Promise.reject(new Error('the resend never finished')))]);
+    expect([res.status, res.body.status]).toEqual([200, 'sending']);
+    const after = await only();
+    expect(after.status).toBe('sending'); // not moved back to pending
+    expect(iso(after.lease)).toBe(at(5).toISOString());
+    expect(await resendAudits()).toBe(0);
+    expect(await fd.dispatcher.runOnce()).toEqual(NONE); // no second run picks it up
+    expect(fd.mail.sent).toHaveLength(0);
   });
 
   it('resend puts a failed message back, due now, and the next run sends it; an audit row names who did it', async () => {

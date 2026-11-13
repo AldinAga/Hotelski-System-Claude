@@ -78,7 +78,7 @@ export class OutboxDispatcher implements OnModuleDestroy {
     const result: DispatchResult = { sent: 0, failed: 0, retried: 0 };
     for (const m of claimed) {
       const outcome = await this.deliver(m);
-      result[outcome] += 1;
+      if (outcome !== null) result[outcome] += 1;
     }
     return result;
   }
@@ -104,7 +104,7 @@ export class OutboxDispatcher implements OnModuleDestroy {
     });
   }
 
-  private async deliver(m: Claimed): Promise<keyof DispatchResult> {
+  private async deliver(m: Claimed): Promise<keyof DispatchResult | null> {
     let failure: MailError | null = null;
     try {
       const mail = render(m.template, m.payload, m.payload.propertyName);
@@ -130,28 +130,37 @@ export class OutboxDispatcher implements OnModuleDestroy {
     const at = this.clock();
     const attempts = m.attempts + 1;
     const atSql = sql`${at.toISOString()}::timestamptz`;
+    // Each write is guarded by status = 'sending': a message whose lease ran out and was claimed again has been
+    // finished by the other run already, and this late result is dropped (no attempt row, not counted).
     return this.db.transaction(async (tx) => {
+      let outcome: keyof DispatchResult;
+      let moved: { rows: unknown[] };
+      if (failure === null) {
+        moved = await tx.execute(sql`
+          UPDATE outbox_message SET status = 'sent', attempts = ${attempts}, sent_at = ${atSql}, lease_until = NULL, last_error = NULL
+           WHERE id = ${m.id} AND property_id = ${m.property_id} AND status = 'sending'
+          RETURNING id`);
+        outcome = 'sent';
+      } else if (failure.permanent || attempts > BACKOFF_MINUTES.length) {
+        moved = await tx.execute(sql`
+          UPDATE outbox_message SET status = 'failed', attempts = ${attempts}, lease_until = NULL, last_error = ${failure.message}
+           WHERE id = ${m.id} AND property_id = ${m.property_id} AND status = 'sending'
+          RETURNING id`);
+        outcome = 'failed';
+      } else {
+        moved = await tx.execute(sql`
+          UPDATE outbox_message
+             SET status = 'pending', attempts = ${attempts}, lease_until = NULL, last_error = ${failure.message},
+                 next_attempt_at = ${addMinutes(at, BACKOFF_MINUTES[attempts - 1]).toISOString()}::timestamptz
+           WHERE id = ${m.id} AND property_id = ${m.property_id} AND status = 'sending'
+          RETURNING id`);
+        outcome = 'retried';
+      }
+      if (moved.rows.length === 0) return null;
       await tx.execute(sql`
         INSERT INTO outbox_attempt (property_id, message_id, at, ok, error)
         VALUES (${m.property_id}, ${m.id}, ${atSql}, ${failure === null}, ${failure?.message ?? null})`);
-      if (failure === null) {
-        await tx.execute(sql`
-          UPDATE outbox_message SET status = 'sent', attempts = ${attempts}, sent_at = ${atSql}, lease_until = NULL, last_error = NULL
-           WHERE id = ${m.id} AND property_id = ${m.property_id}`);
-        return 'sent';
-      }
-      if (failure.permanent || attempts > BACKOFF_MINUTES.length) {
-        await tx.execute(sql`
-          UPDATE outbox_message SET status = 'failed', attempts = ${attempts}, lease_until = NULL, last_error = ${failure.message}
-           WHERE id = ${m.id} AND property_id = ${m.property_id}`);
-        return 'failed';
-      }
-      await tx.execute(sql`
-        UPDATE outbox_message
-           SET status = 'pending', attempts = ${attempts}, lease_until = NULL, last_error = ${failure.message},
-               next_attempt_at = ${addMinutes(at, BACKOFF_MINUTES[attempts - 1]).toISOString()}::timestamptz
-         WHERE id = ${m.id} AND property_id = ${m.property_id}`);
-      return 'retried';
+      return outcome;
     });
   }
 }

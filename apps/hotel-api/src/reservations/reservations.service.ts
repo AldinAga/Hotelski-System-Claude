@@ -582,6 +582,8 @@ export class ReservationsService {
         before: { status: r.status, version: r.version },
         after: { status: 'cancelled', version: next, stays: live.map((s) => s.id) },
       });
+      // Last, after every lock cancel takes: confirmations that have not gone out are closed (Ruling 40).
+      await this.outbox.closeConfirmations(tx, propertyId, id);
       return { id, status: 'cancelled' as const, version: next };
     });
   }

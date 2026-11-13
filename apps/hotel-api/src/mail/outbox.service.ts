@@ -32,6 +32,9 @@ export interface MessageView {
 }
 
 export const NO_RECIPIENT_REASON = 'Gost nema e-adresu.';
+/** `last_error` of a confirmation closed because its reservation was cancelled (status `skipped`, recipient kept). */
+export const RESERVATION_CANCELLED_REASON = 'Rezervacija je otkazana, pa potvrda nije poslata.';
+const RESERVATION_CANCELLED_TEXT = 'Rezervacija je otkazana, pa potvrda ne može da se pošalje.';
 
 /** One message per reservation and template: the idempotency key of the outbox row. */
 export const messageKey = (template: Template, reservationId: string): string => `${template}:${reservationId}`;
@@ -153,6 +156,20 @@ export class OutboxService {
     });
   }
 
+  /**
+   * Called by `cancel` after everything else it takes: closes every confirmation of the reservation that has not
+   * gone out (pending or failed) as `skipped` with a fixed reason, so the guest never gets the confirmation after
+   * the cancellation. One being sent right now (`sending`) and one already `sent` are left alone. The dispatcher
+   * takes no reservation lock while it holds an outbox row, so the order reservation, then outbox rows, holds.
+   */
+  async closeConfirmations(tx: Tx, propertyId: string, reservationId: string): Promise<void> {
+    await tx.execute(sql`
+      UPDATE outbox_message
+         SET status = 'skipped', lease_until = NULL, last_error = ${RESERVATION_CANCELLED_REASON}
+       WHERE property_id = ${propertyId} AND reservation_id = ${reservationId}
+         AND template = 'reservation_confirmed' AND status IN ('pending', 'failed')`);
+  }
+
   // ---- reading ----
 
   /** The messages of one reservation, oldest first, each with its attempts. Writes nothing. */
@@ -205,18 +222,35 @@ export class OutboxService {
     if (!isUuid(id)) throw messageNotFound();
     const propertyId = await this.property.id();
     await this.db.transaction(async (tx) => {
-      const { rows } = await tx.execute<{ status: MessageStatus; attempts: number }>(sql`
-        SELECT status, attempts FROM outbox_message WHERE id = ${id} AND property_id = ${propertyId} FOR UPDATE`);
+      // The row lock is load-bearing: the dispatcher's claim commits 'sending' under the same lock, and a resend
+      // that read 'pending' before it must not write 'pending' after it (the message would go out twice).
+      const { rows } = await tx.execute<{
+        status: MessageStatus;
+        attempts: number;
+        template: Template;
+        reservation_status: string | null;
+      }>(sql`
+        SELECT m.status, m.attempts, m.template, r.status AS reservation_status
+          FROM outbox_message m
+          LEFT JOIN reservation r ON r.id = m.reservation_id AND r.property_id = m.property_id
+         WHERE m.id = ${id} AND m.property_id = ${propertyId}
+           FOR UPDATE OF m`);
       const m = rows[0];
       if (!m) throw messageNotFound();
       if (m.status === 'sent') throw new DomainError('message_already_sent', 'Poruka je već poslata.', 409);
+      if (m.template === 'reservation_confirmed' && m.reservation_status === 'cancelled') {
+        throw new DomainError('message_reservation_cancelled', RESERVATION_CANCELLED_TEXT, 409);
+      }
       if (m.status === 'skipped') {
         throw new DomainError('message_has_no_recipient', 'Gost nema e-adresu, pa poruka ne može da se pošalje.', 409);
       }
       if (m.status === 'sending') return;
-      await tx.execute(sql`
+      const { rows: moved } = await tx.execute<{ id: string }>(sql`
         UPDATE outbox_message SET status = 'pending', next_attempt_at = ${this.clock().toISOString()}::timestamptz
-         WHERE id = ${id} AND property_id = ${propertyId}`);
+         WHERE id = ${id} AND property_id = ${propertyId} AND status IN ('pending', 'failed')
+        RETURNING id`);
+      // Cannot happen while the row is locked above; if it ever does, fail loudly instead of writing over a claim.
+      if (moved.length === 0) throw new Error('outbox: resend found the message in another state than it locked');
       await this.audit.record(tx, {
         propertyId,
         actorUserId: actor.id,
