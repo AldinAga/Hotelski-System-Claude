@@ -777,6 +777,8 @@ describe('FolioView: documents', () => {
     await user.click(screen.getByRole('button', { name: 'Nefiskalni račun' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Folio nema nijednu stavku ni plaćanje, pa dokument ne može da se izda.');
     expect(navigation.go).not.toHaveBeenCalled();
+    // A 409 means the folio is not what the screen showed: it is read again.
+    await waitFor(() => expect(folioReads(calls)).toBe(2));
     // Buttons are usable again after a refusal.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Nefiskalni račun' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Nefiskalni račun' }));

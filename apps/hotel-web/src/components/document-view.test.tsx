@@ -107,7 +107,8 @@ describe('DocumentView', () => {
   it('a negative amount due is a prepayment, shown as a positive amount', async () => {
     show(docOf({ dueMinor: -300_000 }));
     await screen.findByText('Preplata');
-    expect(screen.getByText('Preplata').nextElementSibling).toHaveTextContent('3.000,00 RSD');
+    // Exact text: toHaveTextContent would also accept "-3.000,00 RSD".
+    expect(screen.getByText('Preplata').nextElementSibling?.textContent).toBe('3.000,00 RSD');
     expect(screen.queryByText('Za uplatu')).toBeNull();
   });
 
