@@ -207,23 +207,67 @@ describe('folio documents (e2e)', () => {
     expect(await fd.sql('SELECT 1 FROM folio_document')).toHaveLength(1);
   });
 
+  /**
+   * Fires the requests while the property row is locked by this test. Both writes
+   * (payment, document) must insert a row that references the property, so each
+   * stops at its INSERT, which comes after the key lookup (Rulings 27/27a/28:
+   * no sleeps, the wait has a deadline, the lock is released in finally). With
+   * the key lock the second request waits on it instead; either way `n` requests
+   * wait before the first can write. The day, counter and folio rows must exist
+   * already, so nothing before the lookup touches the property row.
+   */
+  async function raceHeldAtInsert<T>(n: number, fire: () => Array<PromiseLike<T>>): Promise<T[]> {
+    const [{ id: propertyId }] = await fd.sql<{ id: string }>('SELECT id FROM property');
+    const holder = await fd.ta.testDb.pool.connect();
+    let all: Promise<T[]> | null = null;
+    let waitError: unknown = null;
+    try {
+      await holder.query('BEGIN');
+      const { rows } = await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      await holder.query('SELECT 1 FROM property WHERE id = $1 FOR UPDATE', [propertyId]);
+      all = Promise.all(fire());
+      const deadline = Date.now() + 8_000;
+      for (;;) {
+        const [{ waiting }] = await fd.sql<{ waiting: number }>(
+          `SELECT count(*)::int AS waiting FROM pg_stat_activity
+            WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> $1`,
+          [rows[0].pid],
+        );
+        if (waiting >= n) break;
+        if (Date.now() > deadline) throw new Error(`barrier: only ${waiting} of ${n} requests waited`);
+        await new Promise<void>((r) => setTimeout(r, 20));
+      }
+    } catch (err) {
+      waitError = err;
+    } finally {
+      await holder.query('COMMIT');
+      holder.release();
+    }
+    const results = all ? await all : [];
+    if (waitError) throw waitError;
+    return results;
+  }
+
   it('one key on a payment of one stay and a document of another at once: exactly one is written, the other is 409, and a retry of the winner is 200', async () => {
     const a = await inHouse(0, '2026-11-02', '2026-11-03');
     const b = await inHouse(1, '2026-11-02', '2026-11-03');
     await pay(a.stayId, 10_000, 'pay-xtab-0001');
     await pay(b.stayId, 10_000, 'pay-xtab-0002');
+    expect((await issue(b.stayId, 'receipt', 'doc-xtab-0001')).status).toBe(201); // the receipt counter row exists now
     // Uniqueness holds per table, so only the key lock (common/idempotency.ts findKey) can stop the second.
     const key = 'key-xtable-0001';
-    const results = await fd.raceUnderHeldDay(2, () => [pay(a.stayId, 5_000, key), issue(b.stayId, 'receipt', key)]);
+    const results = await raceHeldAtInsert(2, () => [pay(a.stayId, 5_000, key), issue(b.stayId, 'receipt', key)]);
     expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
     expect(results.find((r) => r.status === 409)!.body.code).toBe('idempotency_key_reused');
-    const written = (await fd.sql<{ n: number }>(`SELECT (SELECT count(*) FROM payment WHERE idempotency_key = $1) + (SELECT count(*) FROM folio_document WHERE idempotency_key = $1) AS n`, [key]))[0];
-    expect(Number(written.n)).toBe(1);
+    const [written] = await fd.sql<{ n: number }>(
+      `SELECT ((SELECT count(*) FROM payment WHERE idempotency_key = $1) + (SELECT count(*) FROM folio_document WHERE idempotency_key = $1))::int AS n`,
+      [key],
+    );
+    expect(written.n).toBe(1);
     // The winner's own retry is the first result again, not a conflict.
     const retry = results[0].status === 201 ? await pay(a.stayId, 5_000, key) : await issue(b.stayId, 'receipt', key);
     expect(retry.status).toBe(200);
   });
-
   it('a pro forma of a cancelled stay lists no expected nights', async () => {
     const b = await fd.bookStay({ typeId, planId }, '2026-11-05', '2026-11-07');
     await pay(b.stayId, 10_000, 'pay-cancel-001');
