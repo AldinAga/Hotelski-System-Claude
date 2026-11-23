@@ -5,8 +5,7 @@
 # The runner container mounts the registry .npmrc as ~/.npmrc, so `pnpm install`
 # needs no token here and none must ever be written into this repo.
 #
-# The steps equal infrastructure/nas/ci.sh: install, build, migrations check,
-# test, typecheck.
+# Steps: install, build, migrations check, test, typecheck.
 #
 # Database: no service containers (the runner has no Docker socket, and every
 # throwaway container e-mails the owner when it stops). The job uses the hotel's
@@ -14,8 +13,7 @@
 # ci-compose.yml), which is attached to the runner's network claude-gh-runner_default
 # so the name resolves. The specs create their own databases there (hotel_test_N,
 # hotel_migrate_N, ...); HOTEL_TEST_DB_PREFIX (set below from the run id) keeps every
-# run's databases apart from other runs and from NAS ci.sh runs (no prefix), and the
-# last step drops them.
+# run's databases apart from other runs, and the last step drops them.
 #
 # Security: the repository is public and the runner is self-hosted. Never use
 # pull_request_target here. Runs from fork pull requests need owner approval
@@ -50,11 +48,10 @@ jobs:
       # Throwaway test database (tmpfs); this password is not a secret.
       DATABASE_URL: postgres://postgres:postgres@hotel-postgres-test-claude:5432/postgres
       # Every database the specs create gets this prefix (apps/hotel-api/test/db.ts),
-      # so this run cannot collide with another run or with a NAS ci.sh run.
+      # so this run cannot collide with another run.
       HOTEL_TEST_DB_PREFIX: gh${{ github.run_id }}_${{ github.run_attempt }}_
     steps:
-      # A runner detached from the database network (another branch's ci.sh runs
-      # `compose up` with an older ci-compose.yml) would otherwise hang in the tests
+      # A runner detached from the database network would otherwise hang in the tests
       # until the job timeout.
       - name: Test database reachable
         run: |

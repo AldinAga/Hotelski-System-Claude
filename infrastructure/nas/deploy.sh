@@ -15,7 +15,7 @@
 #      concluded success (it ran build, tests and typecheck on the NAS runner). No green
 #      run, no deploy. GH_REPO overrides the repository.
 #   2. `git archive <sha>` into /volume1/ci/hotel/deploy (never the working tree,
-#      never /volume1/ci/hotel/src, which belongs to ci.sh).
+#      never the removed /volume1/ci/hotel/src).
 #   3. hotel.env: add HOTEL_SECRET_KEY, HOTEL_ROOT_KEYSET, DATABASE_URL if missing
 #      (hotel-env.sh of the deployed ref; add-only, values never printed).
 #   4. docker buildx build -> hotel-claude:<sha> only. Install and build happen in the

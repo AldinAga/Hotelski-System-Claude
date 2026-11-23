@@ -41,7 +41,7 @@ licencama i za POS i za hotel. Kvar u njemu pogađa oba proizvoda, zato:
 
 1. **Samo hotelski projekti.** Hotel radi isključivo u Docker projektima `claude-hotel`
    (`docker compose -f infrastructure/docker/docker-compose.yml`, ime je u fajlu) i `claude-hotel-ci`
-   (`infrastructure/nas/ci-compose.yml`: runner i test baza). Kontejneri, volume-i i mreže su `hotel-*-claude`.
+   (`infrastructure/nas/ci-compose.yml`: test baza). Kontejneri, volume-i i mreže su `hotel-*-claude`.
 2. **Tuđe se ne dira.** Nikad `stop`, `restart`, `rm`, `down`, `docker volume rm`, `docker network rm`
    ni `docker system/volume/image prune` nad bilo čim što nije `hotel-*-claude` / `claude-hotel` / `claude-hotel-ci`.
    Na NAS-u rade i: `claude-pos`, `claude-pos-ci`, `pos-nas-dev`, `claude-staging`, `claude-ci`,
@@ -62,16 +62,9 @@ u `ci-compose.yml`); svaki run dobija svoje baze preko `HOTEL_TEST_DB_PREFIX=gh<
 Prvi korak failuje za nekoliko sekundi ako runner ne vidi bazu. Repo je javan: ne koristiti `pull_request_target`,
 a odobravanje PR-ova sa forkova ostaje uključeno.
 
-`infrastructure/nas/ci.sh` (stari put) šalje radno stablo na NAS (`ci.sh <ref>` šalje `git archive <ref>`), pa tamo radi
-isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_test_N`). `ci.sh --lock` ponovo pravi
-`pnpm-lock.yaml` na NAS-u i vraća ga na računar. Na računaru se ne pokreće `pnpm install`.
-`ci.sh` sa grane čiji `ci-compose.yml` nema mrežu `gh-runner` odvaja runner od test baze (GitHub run tada pada u prvom koraku).
-
-**Šta se sme obrisati i kada.** Odmah ništa. Posle merge-a ove grane u sve aktivne grane i kad niko više ne koristi `ci.sh`:
-(1) `infrastructure/nas/ci.sh`, (2) servis `hotel-ci-runner-claude` iz `ci-compose.yml`, pa
-`docker rm -f hotel-ci-runner-claude` (samo to ime), (3) `/volume1/ci/hotel/src` i `/volume1/ci/hotel/pnpm-store`.
-`ci.sh --lock` tada treba zameniti (lockfile se pravi ručno uz odobrenje). Ostaje:
-`hotel-postgres-test-claude` (koristi ga GitHub CI), `/volume1/ci/hotel/hotel.env`, `/volume1/ci/hotel/deploy`.
+`pnpm-lock.yaml` se menja ručno, uz odobrenje korisnika (CI radi `pnpm install --frozen-lockfile`). Na računaru se ne pokreće
+`pnpm install`. Stari put (`ci.sh`, kontejner `hotel-ci-runner-claude`, `/volume1/ci/hotel/src` i `pnpm-store`) je uklonjen.
+Na NAS-u za testove ostaje samo `hotel-postgres-test-claude`; `/volume1/ci/hotel/hotel.env` i `/volume1/ci/hotel/deploy` koristi `deploy.sh`.
 
 ### Pokretanje i ažuriranje `claude-hotel`
 

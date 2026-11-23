@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 
-// Runs the built dist/main.js (ci.sh builds before it tests) with a broken
+// Runs the built dist/main.js (CI builds before it tests) with a broken
 // configuration and checks that the process stays alive answering 503 instead
 // of exiting, which under `restart: unless-stopped` would be a crash loop.
 const MAIN = resolve(__dirname, '../dist/main.js');
