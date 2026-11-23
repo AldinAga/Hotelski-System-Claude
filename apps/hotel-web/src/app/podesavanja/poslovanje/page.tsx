@@ -154,7 +154,7 @@ export default function BusinessSettingsPage() {
                   inputMode="numeric"
                   maxLength={5}
                   placeholder="03:00"
-                  help="Prazno polje znači da dan zatvarate ručno."
+                  help="Vreme je sledećeg kalendarskog dana posle poslovnog dana: dan 12.11. se zatvara 13.11. u to vreme. Upišite rano jutro, na primer 03:00. Prazno polje znači da dan zatvarate ručno."
                   error={errors.autoCloseTime}
                 />
                 <SelectField
@@ -215,6 +215,7 @@ export default function BusinessSettingsPage() {
                       }}
                       inputMode="decimal"
                       placeholder="20"
+                      onEnter={addRate}
                       error={errors.newRate}
                     />
                   </div>

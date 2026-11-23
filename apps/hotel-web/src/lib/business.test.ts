@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dayMonth, daysLabel, formatPercent, formatTime, guestsLabel, missingLabel, parsePercent } from './business';
+import { PAYMENT_METHODS } from './types';
+import { PAYMENT_METHOD_LABELS, dayMonth, daysLabel, formatPercent, formatTime, guestsGenitive, guestsLabel, missingLabel, parsePercent } from './business';
 
 describe('parsePercent', () => {
   it.each([
@@ -83,5 +84,36 @@ describe('wording', () => {
     expect(missingLabel('address', null)).toBe('adresa');
     expect(missingLabel('city', null)).toBe('mesto');
     expect(missingLabel('somethingNew', null)).toBe('somethingNew');
+  });
+});
+
+describe('guestsGenitive (after "za")', () => {
+  it.each([
+    [1, '1 gosta'],
+    [2, '2 gosta'],
+    [4, '4 gosta'],
+    [5, '5 gostiju'],
+    [10, '10 gostiju'],
+    [11, '11 gostiju'],
+    [12, '12 gostiju'],
+    [14, '14 gostiju'],
+    [21, '21 gosta'],
+    [22, '22 gosta'],
+    [25, '25 gostiju'],
+    [101, '101 gosta'],
+    [111, '111 gostiju'],
+  ])('%i → %s', (n, text) => {
+    expect(guestsGenitive(n)).toBe(text);
+  });
+});
+
+describe('payment method names', () => {
+  it('the payment dialog and the day report call every method the same', () => {
+    for (const m of PAYMENT_METHODS) expect(PAYMENT_METHOD_LABELS[m.value], m.value).toBe(m.label);
+  });
+
+  it('a bank transfer is "Virman" everywhere', () => {
+    expect(PAYMENT_METHODS.find((m) => m.value === 'transfer')?.label).toBe('Virman');
+    expect(PAYMENT_METHOD_LABELS.transfer).toBe('Virman');
   });
 });

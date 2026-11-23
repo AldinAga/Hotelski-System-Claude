@@ -684,7 +684,7 @@ describe('FolioView: Storniraj', () => {
       },
     });
     expect(screen.getAllByRole('button', { name: /^Storniraj plaćanje:/ })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /^Storniraj plaćanje: Prenos/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Storniraj plaćanje: Virman/ })).toBeInTheDocument();
   });
 
   it('line_already_reversed closes the dialog, says so, and reads the folio again', async () => {
@@ -1155,5 +1155,106 @@ describe('FolioView: document keys (W4)', () => {
     const keys = keysOf(calls);
     expect(keys).toHaveLength(3);
     expect(new Set(keys).size).toBe(1);
+  });
+});
+
+describe('FolioView: a payment above the balance (W6)', () => {
+  const PAY = `/stays/${STAY}/folio/payments`;
+  const OVER = 'Iznos je veći od salda. Gost će imati preplatu od 5.000,00 RSD. Pritisnite „Naplati“ još jednom da potvrdite.';
+
+  async function openPay(user: ReturnType<typeof setupUser>) {
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    return screen.findByRole('dialog', { name: 'Naplata' });
+  }
+
+  it('asks once, sends nothing the first time, and sends with the same key the second time', async () => {
+    const { calls, user } = await open({ extra: { [`POST /api${PAY}`]: { status: 201, body: PAYMENT_VIEW } } });
+    const d = await openPay(user);
+    const amount = within(d).getByLabelText('Iznos (RSD)');
+    await user.clear(amount);
+    await user.type(amount, '25000');
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    expect(within(d).getByText(OVER)).toBeInTheDocument();
+    expect(postsTo(calls, PAY)).toHaveLength(0);
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(postsTo(calls, PAY)).toHaveLength(1);
+    expect(postsTo(calls, PAY)[0].body).toEqual({ method: 'cash', amountMinor: 2_500_000, key: expect.stringMatching(KEY) });
+  });
+
+  it('changing the amount after the question asks again for the new amount', async () => {
+    const { calls, user } = await open({ extra: { [`POST /api${PAY}`]: { status: 201, body: PAYMENT_VIEW } } });
+    const d = await openPay(user);
+    const amount = within(d).getByLabelText('Iznos (RSD)');
+    await user.clear(amount);
+    await user.type(amount, '25000');
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    await user.clear(amount);
+    await user.type(amount, '30000');
+    // The old question is gone as soon as the amount changes.
+    expect(within(d).queryByText(OVER)).toBeNull();
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    expect(within(d).getByText('Iznos je veći od salda. Gost će imati preplatu od 10.000,00 RSD. Pritisnite „Naplati“ još jednom da potvrdite.')).toBeInTheDocument();
+    expect(postsTo(calls, PAY)).toHaveLength(0);
+  });
+
+  it('the exact balance and a smaller amount go out at once', async () => {
+    const { calls, user } = await open({ extra: { [`POST /api${PAY}`]: { status: 201, body: PAYMENT_VIEW } } });
+    const d = await openPay(user);
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(postsTo(calls, PAY)).toHaveLength(1);
+    expect(screen.queryByText(/Iznos je veći od salda/)).toBeNull();
+  });
+
+  it('a guest who already has a credit ends up with that credit plus the new payment', async () => {
+    const { user } = await open({ folio: { chargesMinor: 1_000_000, paymentsMinor: 1_500_000, balanceMinor: -500_000 } });
+    const d = await openPay(user);
+    await user.type(within(d).getByLabelText('Iznos (RSD)'), '100');
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    expect(within(d).getByText(/Gost će imati preplatu od 5\.100,00 RSD\./)).toBeInTheDocument();
+  });
+
+  it('with nothing to pay, any amount is a prepayment and is asked about as well', async () => {
+    const { calls, user } = await open({ folio: { balanceMinor: 0, chargesMinor: 0 } });
+    const d = await openPay(user);
+    await user.type(within(d).getByLabelText('Iznos (RSD)'), '100');
+    await user.click(within(d).getByRole('button', { name: 'Naplati' }));
+    expect(within(d).getByText('Iznos je veći od salda. Gost će imati preplatu od 100,00 RSD. Pritisnite „Naplati“ još jednom da potvrdite.')).toBeInTheDocument();
+    expect(postsTo(calls, PAY)).toHaveLength(0);
+  });
+});
+
+describe('FolioView: what a receptionist is told about refunds and stornos (W6)', () => {
+  const CREDIT: Partial<Folio> = { chargesMinor: 1_000_000, paymentsMinor: 1_500_000, balanceMinor: -500_000, payments: [payment()], lines: [line()] };
+  const REFUND_NOTE = 'Povraćaj preplate radi menadžer ili vlasnik.';
+  const STORNO_NOTE = 'Storno stavki i plaćanja radi menadžer ili vlasnik.';
+
+  it('a receptionist is told who does the refund and the storno', async () => {
+    await open({ role: 'receptionist', folio: CREDIT });
+    expect(screen.getByText(REFUND_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(STORNO_NOTE)).toBeInTheDocument();
+  });
+
+  it('a manager sees the buttons and neither sentence', async () => {
+    await open({ role: 'manager', folio: CREDIT });
+    expect(screen.getByRole('button', { name: 'Vrati novac' })).toBeInTheDocument();
+    expect(screen.queryByText(REFUND_NOTE)).toBeNull();
+    expect(screen.queryByText(STORNO_NOTE)).toBeNull();
+  });
+
+  it('without a credit there is no refund sentence, and without rows no storno sentence', async () => {
+    await open({ role: 'receptionist', folio: { lines: [], payments: [] } });
+    expect(screen.queryByText(REFUND_NOTE)).toBeNull();
+    expect(screen.queryByText(STORNO_NOTE)).toBeNull();
+  });
+
+  it('while the role is unknown nothing is said', async () => {
+    mockFetch(routes({ folio: CREDIT, extra: { 'GET /api/auth/me': apiError(500, 'unknown') } }));
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    expect(screen.queryByText(REFUND_NOTE)).toBeNull();
+    expect(screen.queryByText(STORNO_NOTE)).toBeNull();
   });
 });

@@ -210,9 +210,9 @@ describe('messageFor', () => {
 
   it('the settings fields are named as the forms name them', () => {
     expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'autoCloseTime' }))).toBe('Proverite polje „Vreme automatskog zatvaranja“.');
-    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'vatRatesBp' }))).toBe('Proverite polje „Dozvoljene PDV stope“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'vatRatesBp' }))).toBe('Proverite polje „Dozvoljene stope za zaduženja“.');
     expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'taxId' }))).toBe('Proverite polje „PIB“.');
-    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'noShowCharge' }))).toBe('Proverite polje „Naplata kad gost ne dođe“.');
+    expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'noShowCharge' }))).toBe('Proverite polje „Kad gost ne dođe“.');
     expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'accommodationVatBp' }))).toBe('Proverite polje „PDV stopa smeštaja“.');
     expect(messageFor(new ApiError(422, 'validation_failed', 'x', { field: 'day' }))).toBe('Proverite polje „Poslovni dan“.');
   });

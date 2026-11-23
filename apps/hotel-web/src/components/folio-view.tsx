@@ -287,6 +287,15 @@ export function FolioView({ stayId }: { stayId: string }) {
             onIssue={(kind) => void issue(kind)}
           />
 
+          {role === 'receptionist' && folio.status === 'open' && (
+            <div className="stack">
+              {creditOf(folio) > 0 && <p className="muted">Povraćaj preplate radi menadžer ili vlasnik.</p>}
+              {(folio.lines.length > 0 || folio.payments.length > 0) && (
+                <p className="muted">Storno stavki i plaćanja radi menadžer ili vlasnik.</p>
+              )}
+            </div>
+          )}
+
           {folio.unpostedNights.length > 0 && (
             <section aria-labelledby="folio-expected">
               <h2 id="folio-expected">Očekivane noći</h2>
@@ -588,7 +597,8 @@ function PaymentsTable({
 
 // ---- the dialogs ----
 
-type Prepared = { path: string; body: Record<string, unknown> } | { error: string };
+/** `confirm` is a question the person answers by pressing the submit button a second time. */
+type Prepared = { path: string; body: Record<string, unknown>; confirm?: string } | { error: string };
 
 interface DialogHandlers {
   onClose: () => void;
@@ -621,6 +631,8 @@ function FormDialog({
   const keys = useIdempotencyKey();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The question already put to the person; the same question is not asked twice.
+  const [asked, setAsked] = useState<string | null>(null);
   // State updates land after the next click can already fire; the ref closes that gap.
   const inFlight = useRef(false);
 
@@ -630,6 +642,11 @@ function FormDialog({
     const prepared = prepare();
     if ('error' in prepared) {
       setError(prepared.error);
+      return;
+    }
+    if (prepared.confirm && prepared.confirm !== asked) {
+      setError(null);
+      setAsked(prepared.confirm);
       return;
     }
     inFlight.current = true;
@@ -654,9 +671,14 @@ function FormDialog({
 
   return (
     <Modal title={title} onClose={onClose} busy={busy}>
-      <form className="stack" noValidate aria-busy={busy} onSubmit={(e) => void submit(e)}>
+      <form className="stack" noValidate aria-busy={busy} onChange={() => setAsked(null)} onSubmit={(e) => void submit(e)}>
         {intro && <p className="muted">{intro}</p>}
         {children}
+        {asked && (
+          <p role="status" className="warn">
+            {asked}
+          </p>
+        )}
         {error && (
           <p role="alert" className="error">
             {error}
@@ -785,9 +807,14 @@ function PayDialog({ stayId, balanceMinor, ...handlers }: DialogHandlers & { sta
         const parsed = amountFrom(amount);
         if ('error' in parsed) return parsed;
         const ref = reference.trim();
+        // More than the balance (or any payment on a settled folio) leaves the guest with a prepayment: ask once.
+        const over = parsed.minor > Math.max(balanceMinor, 0);
         return {
           path: `/stays/${stayId}/folio/payments`,
           body: { method, amountMinor: parsed.minor, ...(ref ? { reference: ref } : {}) },
+          ...(over
+            ? { confirm: `Iznos je veći od salda. Gost će imati preplatu od ${formatRsd(parsed.minor - balanceMinor)}. Pritisnite „Naplati“ još jednom da potvrdite.` }
+            : {}),
         };
       }}
     >

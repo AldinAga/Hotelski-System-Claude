@@ -83,7 +83,7 @@ export const AuditReport = forwardRef<HTMLHeadingElement, { report: Report }>(fu
               <li key={n.stayId}>
                 <div className="head">
                   <strong>{n.number}</strong>
-                  <span className="num">{n.chargedMinor > 0 ? `Naplaćeno ${formatRsd(n.chargedMinor)}` : 'Bez naplate'}</span>
+                  <span className="num">{n.chargedMinor > 0 ? `Zaduženo ${formatRsd(n.chargedMinor)}` : 'Bez naplate'}</span>
                 </div>
                 <div className="muted">{`${n.guest} · dolazak ${formatDay(n.arrival)}`}</div>
               </li>

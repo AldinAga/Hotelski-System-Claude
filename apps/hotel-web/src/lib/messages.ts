@@ -149,7 +149,7 @@ export const MESSAGES: Record<string, string> = {
 };
 
 /** Field names in validation_failed details, as the forms label them. */
-const FIELD_LABELS: Record<string, string> = {
+export const FIELD_LABELS: Record<string, string> = {
   code: 'Oznaka',
   name: 'Naziv',
   capacity: 'Kapacitet',
@@ -159,7 +159,7 @@ const FIELD_LABELS: Record<string, string> = {
   to: 'Do',
   reason: 'Razlog',
   note: 'Napomena',
-  priceMinor: 'Cena',
+  priceMinor: 'Cena po noći',
   closed: 'Zatvoreno',
   scope: 'Za koga važi cena',
   board: 'Usluga',
@@ -180,10 +180,10 @@ const FIELD_LABELS: Record<string, string> = {
   activityCode: 'Šifra delatnosti',
   bankAccount: 'Broj računa',
   phone: 'Telefon',
-  accommodationCategory: 'Vrsta smeštaja',
+  accommodationCategory: 'Kategorija smeštaja',
   categorizationNumber: 'Broj rešenja o kategorizaciji',
-  kind: 'Pravni oblik',
-  fiscalComplianceMode: 'Fiskalizacija',
+  kind: 'Vrsta lica',
+  fiscalComplianceMode: 'Način fiskalizacije',
   source: 'Izvor',
   channel: 'Kanal',
   'holder.firstName': 'Ime',
@@ -199,7 +199,7 @@ const FIELD_LABELS: Record<string, string> = {
   ratePlanId: 'Cenovnik',
   unitId: 'Jedinica',
   version: 'Verzija',
-  q: 'Pretraga',
+  q: 'Pretraga gostiju',
   guestId: 'Gost',
   firstName: 'Ime',
   lastName: 'Prezime',
@@ -216,9 +216,9 @@ const FIELD_LABELS: Record<string, string> = {
   'guest.phone': 'Telefon',
   // business settings and the day close (Task 12)
   autoCloseTime: 'Vreme automatskog zatvaranja',
-  noShowCharge: 'Naplata kad gost ne dođe',
+  noShowCharge: 'Kad gost ne dođe',
   accommodationVatBp: 'PDV stopa smeštaja',
-  vatRatesBp: 'Dozvoljene PDV stope',
+  vatRatesBp: 'Dozvoljene stope za zaduženja',
   day: 'Poslovni dan',
 };
 

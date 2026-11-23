@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiError, mockFetch } from '@/test/fetch-mock';
 import type { CheckOutPreview, Reservation, ReservationStay } from '@/lib/types';
 import type { LicenceMode } from '@/lib/use-read-only';
+import type { UserRole } from '@/lib/use-role';
 import { StayActions } from './stay-actions';
 
 const DAY = '2026-11-12';
@@ -43,6 +44,7 @@ function setup(
     /** The calendar date and how far the business day lags behind it (GET /business-day). */
     today?: string | null;
     lagDays?: number;
+    role?: UserRole | null;
   } = {},
 ) {
   const onChanged = vi.fn();
@@ -53,6 +55,7 @@ function setup(
       businessDate={over.businessDate === undefined ? DAY : over.businessDate}
       today={over.today ?? null}
       lagDays={over.lagDays ?? 0}
+      role={over.role ?? null}
       licence={licence}
       onChanged={onChanged}
     />
@@ -400,6 +403,53 @@ describe('StayActions: a business day that was not closed (W2)', () => {
     const { container } = setup({ ...LATE, ...ARRIVES_TODAY, licence: 'none' });
     expect(container).toHaveTextContent('Poslovni dan 12.11.2026 nije zatvoren. Licenca nije ispravna, pa prijava gosta nije moguća.');
     expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('a stay of a reservation that is still on request has no check-in button and says why (W6)', () => {
+    const { container } = setup({ reservation: { status: 'requested' } });
+    expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
+    expect(container).toHaveTextContent('Rezervacija nije potvrđena, pa se gost ne može prijaviti.');
+  });
+
+  it('a confirmed reservation shows no such reason (W6)', () => {
+    const { container } = setup();
+    expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeEnabled();
+    expect(container).not.toHaveTextContent('nije potvrđena');
+  });
+
+  it('a request that arrives later only shows the date (W6)', () => {
+    const { container } = setup({ reservation: { status: 'requested' }, stay: { arrival: '2026-11-14' } });
+    expect(screen.getByText('Dolazak 14.11.')).toBeInTheDocument();
+    expect(container).not.toHaveTextContent('nije potvrđena');
+  });
+
+  describe('a credit at check-out for a receptionist (W6)', () => {
+    const CREDIT = { ...PREVIEW, balanceMinor: -500_000 };
+    const NOTE = 'Povraćaj preplate radi menadžer ili vlasnik.';
+
+    it.each([
+      ['receptionist', true],
+      ['manager', false],
+      ['owner', false],
+      [null, false],
+    ] as const)('role %s: the sentence is shown: %s', async (role, shown) => {
+      mockFetch({ 'GET /api/stays/s1/check-out-preview': { body: CREDIT } });
+      const user = userEvent.setup();
+      setup({ stay: inHouse, role });
+      await user.click(screen.getByRole('button', { name: 'Odjavi gosta' }));
+      const panel = await screen.findByRole('region', { name: 'Pregled odjave' });
+      expect(panel).toHaveTextContent('Saldo: -5.000,00 RSD');
+      if (shown) expect(panel).toHaveTextContent(NOTE);
+      else expect(panel).not.toHaveTextContent(NOTE);
+    });
+
+    it('a receptionist with a positive balance is not told about refunds', async () => {
+      mockFetch({ 'GET /api/stays/s1/check-out-preview': { body: { ...PREVIEW, balanceMinor: 500_000 } } });
+      const user = userEvent.setup();
+      setup({ stay: inHouse, role: 'receptionist' });
+      await user.click(screen.getByRole('button', { name: 'Odjavi gosta' }));
+      expect(await screen.findByRole('region', { name: 'Pregled odjave' })).not.toHaveTextContent('Povraćaj preplate');
+    });
   });
 
   describe('the check-out preview', () => {

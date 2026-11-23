@@ -5,6 +5,7 @@ import { ApiError, api, send } from '@/lib/api';
 import { formatDay, formatRsd } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
 import type { LicenceMode } from '@/lib/use-read-only';
+import type { UserRole } from '@/lib/use-role';
 import type { CheckOutPreview, Reservation, ReservationStay } from '@/lib/types';
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
   /** The property's calendar date and how far the business day lags behind it (GET /business-day); 0 while unknown. */
   today?: string | null;
   lagDays?: number;
+  /** The signed-in role, or null while it is not known. */
+  role?: UserRole | null;
   /** Check-out works in safe mode (EXPIRED), nothing at all without a usable licence, check-in only with a full one. */
   licence: LicenceMode;
   /** Called after the action (with the text to show) or after a refusal that means the page is out of date. */
@@ -32,7 +35,7 @@ function dayMonth(day: string): string {
  * arrival day of the open business day; check-out opens a preview of what it
  * will post and release, and confirms only with a zero balance.
  */
-export function StayActions({ stay, reservation, businessDate, today = null, lagDays = 0, licence, onChanged }: Props) {
+export function StayActions({ stay, reservation, businessDate, today = null, lagDays = 0, role = null, licence, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   // The night(s) lost to an unclosed day were read and understood (asked again for every preview).
   const [understood, setUnderstood] = useState(false);
@@ -56,10 +59,13 @@ export function StayActions({ stay, reservation, businessDate, today = null, lag
   }, [preview]);
 
   const expected = stay.status === 'expected';
-  const canCheckIn = expected && businessDate !== null && stay.arrival === businessDate;
+  const confirmed = reservation.status === 'confirmed';
+  const canCheckIn = expected && confirmed && businessDate !== null && stay.arrival === businessDate;
+  // The API refuses check-in unless the reservation is confirmed: say so where the button would be.
+  const needsConfirmation = expected && reservation.status === 'requested' && businessDate !== null && stay.arrival === businessDate;
   // Today's guest while yesterday's business day is still open: check-in waits for the close.
   const dayIsLate = lagDays > 0 && businessDate !== null;
-  const waitsForClose = dayIsLate && expected && stay.arrival > businessDate && today !== null && stay.arrival <= today;
+  const waitsForClose = dayIsLate && expected && confirmed && stay.arrival > businessDate && today !== null && stay.arrival <= today;
   const arrivesLater = expected && businessDate !== null && stay.arrival > businessDate && !waitsForClose;
   const inHouse = stay.status === 'in_house';
   // The API keeps the stay until the open day, so every night before today it gives back is lost to the unclosed day.
@@ -121,7 +127,7 @@ export function StayActions({ stay, reservation, businessDate, today = null, lag
     });
   }
 
-  if (!canCheckIn && !arrivesLater && !waitsForClose && !inHouse && !error) return null;
+  if (!canCheckIn && !needsConfirmation && !arrivesLater && !waitsForClose && !inHouse && !error) return null;
 
   return (
     <div className="stay-block">
@@ -149,6 +155,7 @@ export function StayActions({ stay, reservation, businessDate, today = null, lag
           {licence === 'none' && 'Licenca nije ispravna, pa prijava gosta nije moguća.'}
         </p>
       )}
+      {needsConfirmation && <p className="muted">Rezervacija nije potvrđena, pa se gost ne može prijaviti.</p>}
       {!preview && (canCheckIn || arrivesLater || inHouse) && (
         <div className="stay-actions">
           {canCheckIn && (
@@ -218,6 +225,7 @@ export function StayActions({ stay, reservation, businessDate, today = null, lag
               {', pa ponovo otvorite pregled odjave.'}
             </div>
           )}
+          {preview.balanceMinor < 0 && role === 'receptionist' && <div>Povraćaj preplate radi menadžer ili vlasnik.</div>}
           <div className="stay-actions">
             {preview.balanceMinor === 0 && (
               <button type="button" disabled={busy || licence === 'none' || (lostNights.length > 0 && !understood)} onClick={() => void checkOut()}>

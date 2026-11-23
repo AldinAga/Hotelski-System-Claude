@@ -224,6 +224,14 @@ export function guestsLabel(n: number): string {
   return `${n} gostiju`;
 }
 
+/** The same after "za": 1 gosta, 2 gosta, 5 gostiju, 11 gostiju, 21 gosta. */
+export function guestsGenitive(n: number): string {
+  const ten = n % 10;
+  const hundred = n % 100;
+  const few = ten >= 1 && ten <= 4 && (hundred < 11 || hundred > 14);
+  return few ? `${n} gosta` : `${n} gostiju`;
+}
+
 /** The hour and minute of a timestamp in the property's zone, e.g. "02:00". */
 export function formatTime(iso: string): string {
   const t = Date.parse(iso);
