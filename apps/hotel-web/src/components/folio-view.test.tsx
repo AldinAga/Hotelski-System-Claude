@@ -1082,3 +1082,78 @@ describe('FolioView: a stale balance (W1)', () => {
     expect(c).not.toBe(a);
   });
 });
+
+describe('FolioView: document keys (W4)', () => {
+  const ISSUE = `/stays/${STAY}/folio/documents`;
+  const keysOf = (calls: Call[]) => postsTo(calls, ISSUE).map((p) => (p.body as { key: string }).key);
+
+  it.each([
+    ['Nefiskalni račun', 'receipt'],
+    ['Predračun', 'proforma'],
+  ])('%s: a payment between two clicks is a different action, so the second click has a new key', async (name, kind) => {
+    let attempts = 0;
+    const calls = mockFetch(
+      routes({
+        extra: {
+          // The first answer is lost on the way back: the server may have issued it.
+          [`POST /api${ISSUE}`]: () => {
+            attempts += 1;
+            if (attempts === 1) throw new TypeError('Failed to fetch');
+            return { status: 201, body: { ...DOC_VIEW, kind } };
+          },
+          [`POST /api/stays/${STAY}/folio/payments`]: { status: 201, body: PAYMENT_VIEW },
+        },
+      }),
+    );
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name }));
+    await screen.findByRole('alert');
+    await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
+
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Naplata' })).getByRole('button', { name: 'Naplati' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name }));
+    await waitFor(() => expect(navigation.go).toHaveBeenCalled());
+    const [first, second] = keysOf(calls);
+    expect(first).toMatch(KEY);
+    expect(second).not.toBe(first);
+  });
+
+  it('a retry without a money write in between keeps the key of both documents', async () => {
+    let attempts = 0;
+    const calls = mockFetch(
+      routes({
+        extra: {
+          [`POST /api${ISSUE}`]: () => {
+            attempts += 1;
+            if (attempts < 3) throw new TypeError('Failed to fetch');
+            return { status: 201, body: DOC_VIEW };
+          },
+        },
+      }),
+    );
+    const user = setupUser();
+    render(<FolioView stayId={STAY} />);
+    await screen.findByText('Ukupno');
+    await settled();
+    await user.click(screen.getByRole('button', { name: 'Nefiskalni račun' }));
+    await screen.findByRole('alert');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Nefiskalni račun' })).toBeEnabled());
+    // Closing a dialog without a payment is not a money write either.
+    await user.click(screen.getByRole('button', { name: 'Naplati' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Naplata' })).getByRole('button', { name: 'Odustani' }));
+    await user.click(screen.getByRole('button', { name: 'Nefiskalni račun' }));
+    await waitFor(() => expect(attempts).toBe(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Nefiskalni račun' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Nefiskalni račun' }));
+    await waitFor(() => expect(navigation.go).toHaveBeenCalled());
+    const keys = keysOf(calls);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+  });
+});

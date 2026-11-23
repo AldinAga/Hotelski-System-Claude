@@ -162,6 +162,9 @@ export function FolioView({ stayId }: { stayId: string }) {
   }
 
   async function done(text: string) {
+    // A money write changes what the documents show, so the next document is a different action.
+    receiptKey.renew();
+    proformaKey.renew();
     setDialog(null);
     setError(null);
     setNotice(text);
