@@ -473,6 +473,37 @@ describe('night audit (e2e)', () => {
     expect(await fd.sql(`SELECT last_auto_error FROM business_day WHERE day = '2026-11-04'`)).toEqual([{ last_auto_error: null }]);
   });
 
+  it('auto close: an unexpected error is stored as a fixed Serbian text (never the driver message) and the close is tried again', async () => {
+    const scheduler = fd.app.get(NightAuditScheduler);
+    await fd.put('/settings/business', { autoCloseTime: '03:00' });
+    await openToday(); // 2026-11-02 is open
+    fd.setNow(new Date('2026-11-03T02:00:00Z'));
+    const driver = 'connect ECONNREFUSED 10.1.2.3:5432 (password authentication failed for user "hotel")';
+    const close = jest.spyOn(fd.app.get(NightAuditService), 'close').mockRejectedValueOnce(new Error(driver));
+    try {
+      // The error still reaches the timer, which logs it and ticks again.
+      await expect(scheduler.runOnce()).rejects.toThrow('ECONNREFUSED');
+      await fd.travel(new Date('2026-11-03T02:00:00Z'));
+      const view = (await fd.get('/business-day')).body;
+      expect(view.day).toBe('2026-11-02');
+      expect(view.lastAutoError).toEqual({
+        at: '2026-11-03T02:00:00.000Z',
+        code: 'close_failed',
+        details: {
+          message:
+            'Automatsko zatvaranje dana nije uspelo zbog greške sistema. Pokušavamo ponovo svakog minuta; ako se ponavlja, obratite se podršci.',
+        },
+      });
+      expect(JSON.stringify(view)).not.toMatch(/ECONNREFUSED|password|10\.1\.2\.3/);
+
+      // The next tick closes the day and the error goes with it.
+      expect(await scheduler.runOnce()).toBe('closed');
+      expect(await fd.sql(`SELECT last_auto_error FROM business_day WHERE day = '2026-11-02'`)).toEqual([{ last_auto_error: null }]);
+    } finally {
+      close.mockRestore();
+    }
+  });
+
   it('auto close: two overlapping runs close once', async () => {
     await fd.put('/settings/business', { autoCloseTime: '03:00' });
     await openToday();
