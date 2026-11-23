@@ -45,10 +45,12 @@ interface TextProps extends FieldFrame {
   autoComplete?: string;
   /** Marked for assistive technology; the form checks it itself (the browser's own check would hide our errors). */
   required?: boolean;
+  /** Enter in this field does this instead of submitting the form. */
+  onEnter?: () => void;
 }
 
 /** A labelled text input whose error and help are tied to it. */
-export function TextField({ value, onChange, disabled, inputMode, maxLength, placeholder, autoComplete, required, ...frame }: TextProps) {
+export function TextField({ value, onChange, disabled, inputMode, maxLength, placeholder, autoComplete, required, onEnter, ...frame }: TextProps) {
   return (
     <Frame {...frame}>
       <input
@@ -56,6 +58,14 @@ export function TextField({ value, onChange, disabled, inputMode, maxLength, pla
         name={frame.id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={
+          onEnter &&
+          ((e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            onEnter();
+          })
+        }
         disabled={disabled}
         inputMode={inputMode}
         maxLength={maxLength}

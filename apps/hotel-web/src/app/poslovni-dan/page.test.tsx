@@ -203,12 +203,36 @@ describe('Poslovni dan: the confirmation and the close', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     // 4 nights and 1 no-show come from pending.nightsToPost and pending.noShows, not from pending.inHouse (9).
     expect(dialog).toHaveTextContent('Proknjižiće se 4 noći.');
-    expect(dialog).toHaveTextContent('Za 1 gost se beleži „nije došao“.');
+    expect(dialog).toHaveTextContent('Za 1 gosta se beleži „nije došao“.');
     expect(within(dialog).getByRole('heading', { name: 'Zatvaranje dana 2.11.2026' })).toHaveFocus();
 
     await user.click(within(dialog).getByRole('button', { name: 'Odustani' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('button', { name: 'Zatvori dan 2.11.' })).toHaveFocus();
+  });
+
+  it.each([
+    [2, 'Za 2 gosta se beleži „nije došao“.'],
+    [5, 'Za 5 gostiju se beleži „nije došao“.'],
+    [11, 'Za 11 gostiju se beleži „nije došao“.'],
+    [21, 'Za 21 gosta se beleži „nije došao“.'],
+  ])('the dialog says it right for %i guests who did not come (W6)', async (noShows, sentence) => {
+    setup([view({ pending: { ...VIEW.pending, noShows } })]);
+    const user = userEvent.setup();
+    render(<BusinessDayPage />);
+    await user.click(await screen.findByRole('button', { name: 'Zatvori dan 2.11.' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent(sentence);
+  });
+
+  it('with nobody who did not come the dialog has no sentence about it (W6)', async () => {
+    setup([view({ pending: { ...VIEW.pending, noShows: 0 } })]);
+    const user = userEvent.setup();
+    render(<BusinessDayPage />);
+    await user.click(await screen.findByRole('button', { name: 'Zatvori dan 2.11.' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Proknjižiće se 4 noći. Posle toga se otvara sledeći poslovni dan.');
+    expect(dialog).not.toHaveTextContent('nije došao');
+    expect(dialog).not.toHaveTextContent('Za 0');
   });
 
   it('Escape cancels without sending anything and returns the focus', async () => {
@@ -293,7 +317,7 @@ describe('Poslovni dan: the confirmation and the close', () => {
     expect(figure('Proknjižene noći')).toHaveTextContent('4');
     expect(figure('Prihod od smeštaja')).toHaveTextContent('15.000,00 RSD');
     expect(within(report).getByText('R-2026-000009')).toBeInTheDocument();
-    expect(within(report).getByText('Naplaćeno 5.000,00 RSD')).toBeInTheDocument();
+    expect(within(report).getByText('Zaduženo 5.000,00 RSD')).toBeInTheDocument();
     const kinds = within(report).getByRole('region', { name: 'Stavke po vrsti' });
     expect(within(kinds).getByText('Smeštaj').nextElementSibling).toHaveTextContent('20.000,00 RSD');
     expect(within(kinds).getByText('Ispravka').nextElementSibling).toHaveTextContent('-5.000,00 RSD');
@@ -345,6 +369,56 @@ describe('Poslovni dan: the confirmation and the close', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Otvoren je drugi poslovni dan (3.11.2026). Osvežite prikaz.');
     expect(await screen.findByRole('button', { name: 'Zatvori dan 3.11.' })).toBeInTheDocument();
     expect(calls.filter((c) => c.url === '/api/business-day')).toHaveLength(2);
+  });
+
+  it('a failed re-read after the close does not leave the old day on screen as current (W6)', async () => {
+    // The close goes through, then the read of the new state fails.
+    let reads = 0;
+    mockFetch({
+      'GET /api/licence': { body: { activated: true, modules: ['hotel.core', 'hotel.folio'], limits: {}, state: 'VALID' } },
+      'GET /api/auth/me': { body: { role: 'owner' } },
+      'GET /api/business-day': () => {
+        reads += 1;
+        return reads === 1 ? { body: VIEW } : reads === 2 ? apiError(500, 'unknown') : { body: view({ day: '2026-11-03', lagDays: 0 }) };
+      },
+      'GET /api/business-days': { body: CLOSED },
+      'POST /api/business-day/close': { body: { alreadyClosed: false, report: REPORT } },
+    });
+    const user = userEvent.setup();
+    render(<BusinessDayPage />);
+    await user.click(await screen.findByRole('button', { name: 'Zatvori dan 2.11.' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Potvrdi zatvaranje' }));
+
+    expect(await screen.findByText('Stanje poslovnog dana nije moglo da se osveži, pa ga ne prikazujemo. Pokušajte ponovo.')).toBeInTheDocument();
+    expect(screen.queryByText('Otvoreni poslovni dan')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Zatvori dan/ })).toBeNull();
+    // What did happen is still said: the day was closed and its report is there.
+    expect(screen.getByRole('status')).toHaveTextContent('Dan 2.11.2026 je zatvoren.');
+
+    await user.click(screen.getByRole('button', { name: 'Pokušaj ponovo' }));
+    expect(await screen.findByRole('button', { name: 'Zatvori dan 3.11.' })).toBeInTheDocument();
+    expect(screen.queryByText(/nije moglo da se osveži/)).toBeNull();
+  });
+
+  it('a conflict followed by a failed re-read hides the old day too (W6)', async () => {
+    let reads = 0;
+    mockFetch({
+      'GET /api/licence': { body: { activated: true, modules: ['hotel.core', 'hotel.folio'], limits: {}, state: 'VALID' } },
+      'GET /api/auth/me': { body: { role: 'owner' } },
+      'GET /api/business-day': () => {
+        reads += 1;
+        return reads === 1 ? { body: VIEW } : apiError(500, 'unknown');
+      },
+      'GET /api/business-days': { body: CLOSED },
+      'POST /api/business-day/close': apiError(409, 'business_day_mismatch', 'x', { open: '2026-11-03' }),
+    });
+    const user = userEvent.setup();
+    render(<BusinessDayPage />);
+    await user.click(await screen.findByRole('button', { name: 'Zatvori dan 2.11.' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Potvrdi zatvaranje' }));
+    expect(await screen.findByRole('button', { name: 'Pokušaj ponovo' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Zatvori dan/ })).toBeNull();
+    expect(screen.getByText('Otvoren je drugi poslovni dan (3.11.2026). Osvežite prikaz.')).toBeInTheDocument();
   });
 
   it('close_blocked shows the message and the blockers that appeared', async () => {

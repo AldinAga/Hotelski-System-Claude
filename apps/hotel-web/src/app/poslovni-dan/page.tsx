@@ -29,6 +29,8 @@ function autoErrorText(e: NonNullable<BusinessDayView['lastAutoError']>): string
 export default function BusinessDayPage() {
   const licence = useLicenceMode();
   const [view, setView] = useState<BusinessDayView | null>(null);
+  // The last read of the open day failed: what `view` holds is old and must not be shown as the current day.
+  const [stale, setStale] = useState(false);
   const [closed, setClosed] = useState<ClosedDaySummary[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,14 @@ export default function BusinessDayPage() {
    * or a 409, when the buttons that start them are off or gone.
    */
   const load = useCallback(async () => {
-    const v = await api<BusinessDayView>('/business-day');
+    let v: BusinessDayView;
+    try {
+      v = await api<BusinessDayView>('/business-day');
+    } catch (err) {
+      setStale(true);
+      throw err;
+    }
+    setStale(false);
     setView(v);
     try {
       const rows = await api<ClosedDaySummary[]>(`/business-days?from=${addDays(v.day, -CLOSED_DAYS_SHOWN)}&to=${v.day}`);
@@ -137,7 +146,25 @@ export default function BusinessDayPage() {
         </p>
       )}
 
-      {view && (
+      {view && stale && (
+        <section className="card stack" aria-label="Stanje dana nije osveženo">
+          <p>Stanje poslovnog dana nije moglo da se osveži, pa ga ne prikazujemo. Pokušajte ponovo.</p>
+          <div>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setError(null);
+                load().catch((err: unknown) => setError(messageFor(err)));
+              }}
+            >
+              Pokušaj ponovo
+            </button>
+          </div>
+        </section>
+      )}
+
+      {view && !stale && (
         <>
           <section className="card bday-hero" aria-labelledby="open-day-label">
             <p id="open-day-label" className="eyebrow">

@@ -97,6 +97,96 @@ describe('Modal', () => {
     expect(document.body).not.toHaveClass('modal-open');
   });
 
+  describe('focus that has left the dialog (W7)', () => {
+    const backdrop = () => document.querySelector('.modal-backdrop') as HTMLElement;
+    const inside = () => screen.getByRole('dialog').contains(document.activeElement);
+
+    it('a click on the backdrop does not let Tab out: it goes to the first control of the dialog', async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      await user.click(screen.getByRole('button', { name: 'Otvori' }));
+      await user.click(backdrop());
+      expect(inside()).toBe(false);
+      await user.tab();
+      expect(inside()).toBe(true);
+      expect(screen.getByLabelText('Prvo polje')).toHaveFocus();
+    });
+
+    it('Shift+Tab after a click on the backdrop goes to the last control', async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      await user.click(screen.getByRole('button', { name: 'Otvori' }));
+      await user.click(backdrop());
+      await user.tab({ shift: true });
+      expect(screen.getByRole('button', { name: 'Drugo dugme' })).toHaveFocus();
+    });
+
+    it('Escape still closes the dialog after a click on the backdrop', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      render(<Harness onClose={onClose} />);
+      await user.click(screen.getByRole('button', { name: 'Otvori' }));
+      await user.click(backdrop());
+      await user.keyboard('{Escape}');
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('Escape does nothing while busy, also from outside the dialog', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      render(<Harness busy onClose={onClose} />);
+      await user.click(screen.getByRole('button', { name: 'Otvori' }));
+      await user.click(backdrop());
+      await user.keyboard('{Escape}');
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('a focused button that becomes disabled while busy hands focus to the heading, and Tab stays inside', async () => {
+      const user = userEvent.setup();
+      function Submitting() {
+        const [busy, setBusy] = useState(false);
+        return (
+          <main>
+            <h1 tabIndex={-1}>Stranica</h1>
+            <Modal title="Naplata" busy={busy} onClose={() => undefined}>
+              <input aria-label="Prvo polje" />
+              <button type="button" disabled={busy} onClick={() => setBusy(true)}>
+                Naplati
+              </button>
+              <button type="button" disabled={busy}>
+                Odustani
+              </button>
+            </Modal>
+            <button type="button" onClick={() => setBusy(false)}>
+              Iza dijaloga
+            </button>
+          </main>
+        );
+      }
+      render(<Submitting />);
+      await user.click(screen.getByRole('button', { name: 'Naplati' }));
+      expect(screen.getByRole('button', { name: 'Naplati' })).toBeDisabled();
+      expect(screen.getByRole('heading', { name: 'Naplata' })).toHaveFocus();
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Iza dijaloga' })).not.toHaveFocus();
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    });
+
+    it('Tab from a button that was disabled under focus lands on an enabled control inside', async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      await user.click(screen.getByRole('button', { name: 'Otvori' }));
+      const last = screen.getByRole('button', { name: 'Drugo dugme' });
+      last.focus();
+      (last as HTMLButtonElement).disabled = true;
+      expect(document.activeElement).toBe(last);
+      await user.tab();
+      expect(inside()).toBe(true);
+      expect(document.activeElement).not.toBe(last);
+    });
+  });
+
   it('puts focus on the page heading when the button that opened it is gone', async () => {
     const user = userEvent.setup();
     function Vanishing() {

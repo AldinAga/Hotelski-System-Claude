@@ -1,9 +1,10 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiError, mockFetch } from '@/test/fetch-mock';
 import type { CheckOutPreview, Reservation, ReservationStay } from '@/lib/types';
 import type { LicenceMode } from '@/lib/use-read-only';
+import type { UserRole } from '@/lib/use-role';
 import { StayActions } from './stay-actions';
 
 const DAY = '2026-11-12';
@@ -34,13 +35,27 @@ const PREVIEW: CheckOutPreview = {
   balanceMinor: 0,
 };
 
-function setup(over: { stay?: Partial<ReservationStay>; businessDate?: string | null; licence?: LicenceMode } = {}) {
+function setup(
+  over: {
+    stay?: Partial<ReservationStay>;
+    businessDate?: string | null;
+    licence?: LicenceMode;
+    reservation?: Partial<Reservation>;
+    /** The calendar date and how far the business day lags behind it (GET /business-day). */
+    today?: string | null;
+    lagDays?: number;
+    role?: UserRole | null;
+  } = {},
+) {
   const onChanged = vi.fn();
   const ui = (licence: LicenceMode) => (
     <StayActions
       stay={{ ...STAY, ...over.stay }}
-      reservation={RESERVATION}
+      reservation={{ ...RESERVATION, ...over.reservation }}
       businessDate={over.businessDate === undefined ? DAY : over.businessDate}
+      today={over.today ?? null}
+      lagDays={over.lagDays ?? 0}
+      role={over.role ?? null}
       licence={licence}
       onChanged={onChanged}
     />
@@ -335,5 +350,206 @@ describe('StayActions: check-out', () => {
   it('offers no check-out for a stay that is not in the house', () => {
     setup({ stay: { status: 'checked_out' } });
     expect(screen.queryByRole('button', { name: 'Odjavi gosta' })).toBeNull();
+  });
+});
+
+describe('StayActions: a business day that was not closed (W2)', () => {
+  // The open day is 12.11., the calendar says 13.11.: yesterday was never closed.
+  const LATE = { businessDate: DAY, today: '2026-11-13', lagDays: 1 };
+  const ARRIVES_TODAY = { stay: { arrival: '2026-11-13', departure: '2026-11-15' } };
+  const REASON = 'Poslovni dan 12.11.2026 nije zatvoren. Zatvorite dan da biste prijavili gosta.';
+
+  it('a guest arriving today gets the reason and a link to the business-day screen, not a bare date', () => {
+    const { container } = setup({ ...LATE, ...ARRIVES_TODAY });
+    expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
+    expect(container).toHaveTextContent(REASON);
+    expect(screen.getByRole('link', { name: 'Zatvorite dan' })).toHaveAttribute('href', '/poslovni-dan');
+    expect(screen.queryByText(/^Dolazak/)).toBeNull();
+  });
+
+  it('with the business day on time the guest can be checked in and no reason shows (lag 0)', () => {
+    const { container } = setup({ businessDate: DAY, today: DAY, lagDays: 0 });
+    expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeEnabled();
+    expect(container).not.toHaveTextContent('nije zatvoren');
+  });
+
+  it('the lag the API reports decides: lag 0 says nothing, whatever the dates look like', () => {
+    const { container } = setup({ businessDate: DAY, today: '2026-11-13', lagDays: 0, ...ARRIVES_TODAY });
+    expect(container).not.toHaveTextContent('nije zatvoren');
+    expect(screen.getByText('Dolazak 13.11.')).toBeInTheDocument();
+  });
+
+  it('after an evening close (lag below 0) the guest of the new day is checked in and nothing is said about a late day', () => {
+    const { container } = setup({ businessDate: '2026-11-13', today: DAY, lagDays: -1, stay: { arrival: '2026-11-13' } });
+    expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeEnabled();
+    expect(container).not.toHaveTextContent('nije zatvoren');
+  });
+
+  it('a guest arriving after today only gets the date, also while the day is late', () => {
+    const { container } = setup({ ...LATE, stay: { arrival: '2026-11-14' } });
+    expect(screen.getByText('Dolazak 14.11.')).toBeInTheDocument();
+    expect(container).not.toHaveTextContent('nije zatvoren');
+  });
+
+  it('in safe mode the reason says check-in is not possible and still links to closing the day', () => {
+    const { container } = setup({ ...LATE, ...ARRIVES_TODAY, licence: 'safe' });
+    expect(container).toHaveTextContent(
+      'Poslovni dan 12.11.2026 nije zatvoren. Licenca je istekla, pa prijava gosta nije moguća. Dan možete zatvoriti na ekranu Poslovni dan.',
+    );
+    expect(screen.getByRole('link', { name: 'Poslovni dan' })).toHaveAttribute('href', '/poslovni-dan');
+  });
+
+  it('without a usable licence the reason has no link, because the day cannot be closed either', () => {
+    const { container } = setup({ ...LATE, ...ARRIVES_TODAY, licence: 'none' });
+    expect(container).toHaveTextContent('Poslovni dan 12.11.2026 nije zatvoren. Licenca nije ispravna, pa prijava gosta nije moguća.');
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('a stay of a reservation that is still on request has no check-in button and says why (W6)', () => {
+    const { container } = setup({ reservation: { status: 'requested' } });
+    expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
+    expect(container).toHaveTextContent('Rezervacija nije potvrđena, pa se gost ne može prijaviti.');
+  });
+
+  it('a confirmed reservation shows no such reason (W6)', () => {
+    const { container } = setup();
+    expect(screen.getByRole('button', { name: 'Prijavi gosta' })).toBeEnabled();
+    expect(container).not.toHaveTextContent('nije potvrđena');
+  });
+
+  it('a request that arrives later only shows the date (W6)', () => {
+    const { container } = setup({ reservation: { status: 'requested' }, stay: { arrival: '2026-11-14' } });
+    expect(screen.getByText('Dolazak 14.11.')).toBeInTheDocument();
+    expect(container).not.toHaveTextContent('nije potvrđena');
+  });
+
+  describe('a credit at check-out for a receptionist (W6)', () => {
+    const CREDIT = { ...PREVIEW, balanceMinor: -500_000 };
+    const NOTE = 'Povraćaj preplate radi menadžer ili vlasnik.';
+
+    it.each([
+      ['receptionist', true],
+      ['manager', false],
+      ['owner', false],
+      [null, false],
+    ] as const)('role %s: the sentence is shown: %s', async (role, shown) => {
+      mockFetch({ 'GET /api/stays/s1/check-out-preview': { body: CREDIT } });
+      const user = userEvent.setup();
+      setup({ stay: inHouse, role });
+      await user.click(screen.getByRole('button', { name: 'Odjavi gosta' }));
+      const panel = await screen.findByRole('region', { name: 'Pregled odjave' });
+      expect(panel).toHaveTextContent('Saldo: -5.000,00 RSD');
+      if (shown) expect(panel).toHaveTextContent(NOTE);
+      else expect(panel).not.toHaveTextContent(NOTE);
+    });
+
+    it('a receptionist with a positive balance is not told about refunds', async () => {
+      mockFetch({ 'GET /api/stays/s1/check-out-preview': { body: { ...PREVIEW, balanceMinor: 500_000 } } });
+      const user = userEvent.setup();
+      setup({ stay: inHouse, role: 'receptionist' });
+      await user.click(screen.getByRole('button', { name: 'Odjavi gosta' }));
+      expect(await screen.findByRole('region', { name: 'Pregled odjave' })).not.toHaveTextContent('Povraćaj preplate');
+    });
+  });
+
+  describe('the check-out preview', () => {
+    // Leaving today (13.11.) while 12.11. is open: the API keeps the stay until 12.11. and gives night 12.11. back.
+    const LOSES_A_NIGHT = {
+      ...PREVIEW,
+      businessDate: DAY,
+      earlyDeparture: true,
+      keptUntil: DAY,
+      nightsToPost: [],
+      nightsToRelease: ['2026-11-12'],
+    };
+    const inHouseStay = { stay: { ...inHouse, arrival: '2026-11-10', departure: '2026-11-13' } };
+    const checkOutRoutes = (preview: unknown) => ({
+      'GET /api/stays/s1/check-out-preview': { body: preview },
+      'POST /api/stays/s1/check-out': { body: { stayId: 's1', status: 'checked_out', version: 5, departure: DAY } },
+    });
+    const open = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole('button', { name: 'Odjavi gosta' }));
+      return screen.findByRole('region', { name: 'Pregled odjave' });
+    };
+
+    it('names the night that will not be charged, links to closing the day and wants a second confirmation', async () => {
+      const calls = mockFetch(checkOutRoutes(LOSES_A_NIGHT));
+      const user = userEvent.setup();
+      const { onChanged } = setup({ ...LATE, ...inHouseStay });
+      const panel = await open(user);
+      expect(panel).toHaveTextContent('Noć 12.11.2026 neće biti naplaćena jer poslovni dan 12.11.2026 nije zatvoren.');
+      expect(within(panel).getByRole('link', { name: 'Zatvorite dan' })).toHaveAttribute('href', '/poslovni-dan');
+      const confirm = within(panel).getByRole('button', { name: 'Potvrdi odjavu' });
+      expect(confirm).toBeDisabled();
+      await user.click(within(panel).getByRole('checkbox', { name: 'Razumem da noć neće biti naplaćena i odjavljujem gosta.' }));
+      expect(confirm).toBeEnabled();
+      await user.click(confirm);
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith('Gost je odjavljen.'));
+      expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+    });
+
+    it('the confirmation can be taken back, and it is asked again for the next preview', async () => {
+      mockFetch(checkOutRoutes(LOSES_A_NIGHT));
+      const user = userEvent.setup();
+      setup({ ...LATE, ...inHouseStay });
+      let panel = await open(user);
+      const box = within(panel).getByRole('checkbox');
+      await user.click(box);
+      await user.click(box);
+      expect(within(panel).getByRole('button', { name: 'Potvrdi odjavu' })).toBeDisabled();
+      await user.click(box);
+      await user.click(within(panel).getByRole('button', { name: 'Odustani' }));
+      panel = await open(user);
+      expect(within(panel).getByRole('checkbox')).not.toBeChecked();
+      expect(within(panel).getByRole('button', { name: 'Potvrdi odjavu' })).toBeDisabled();
+    });
+
+    it('says nights in the plural when more than one is lost', async () => {
+      mockFetch(
+        checkOutRoutes({ ...LOSES_A_NIGHT, businessDate: '2026-11-11', keptUntil: '2026-11-11', nightsToRelease: ['2026-11-11', '2026-11-12'] }),
+      );
+      const user = userEvent.setup();
+      setup({ businessDate: '2026-11-11', today: '2026-11-13', lagDays: 2, stay: { ...inHouse, arrival: '2026-11-09', departure: '2026-11-13' } });
+      const panel = await open(user);
+      expect(panel).toHaveTextContent('Noći 11.11.2026, 12.11.2026 neće biti naplaćene jer poslovni dan 11.11.2026 nije zatvoren.');
+      expect(within(panel).getByRole('checkbox', { name: 'Razumem da noći neće biti naplaćene i odjavljujem gosta.' })).toBeInTheDocument();
+    });
+
+    it('with the day on time an early departure is a real one: no warning and one click confirms (lag 0)', async () => {
+      mockFetch(checkOutRoutes({ ...LOSES_A_NIGHT, nightsToRelease: ['2026-11-14'], keptUntil: '2026-11-14' }));
+      const user = userEvent.setup();
+      setup({ businessDate: DAY, today: DAY, lagDays: 0, ...inHouseStay });
+      const panel = await open(user);
+      expect(panel).not.toHaveTextContent('nije zatvoren');
+      expect(within(panel).queryByRole('checkbox')).toBeNull();
+      expect(within(panel).getByRole('button', { name: 'Potvrdi odjavu' })).toBeEnabled();
+    });
+
+    it('a day that is late but a night that is released after today is a real early departure: no warning', async () => {
+      mockFetch(checkOutRoutes({ ...LOSES_A_NIGHT, nightsToRelease: ['2026-11-14'] }));
+      const user = userEvent.setup();
+      setup({ ...LATE, ...inHouseStay });
+      const panel = await open(user);
+      expect(panel).not.toHaveTextContent('neće biti naplaćen');
+      expect(within(panel).queryByRole('checkbox')).toBeNull();
+    });
+
+    it('after an evening close (lag below 0) there is no warning', async () => {
+      mockFetch(checkOutRoutes({ ...LOSES_A_NIGHT, businessDate: '2026-11-13', keptUntil: '2026-11-13', nightsToRelease: ['2026-11-14'] }));
+      const user = userEvent.setup();
+      setup({ businessDate: '2026-11-13', today: DAY, lagDays: -1, ...inHouseStay });
+      const panel = await open(user);
+      expect(panel).not.toHaveTextContent('neće biti naplaćen');
+      expect(within(panel).queryByRole('checkbox')).toBeNull();
+    });
+
+    it('in safe mode the link is still offered, because closing the day is allowed there', async () => {
+      mockFetch(checkOutRoutes(LOSES_A_NIGHT));
+      const user = userEvent.setup();
+      setup({ ...LATE, ...inHouseStay, licence: 'safe' });
+      const panel = await open(user);
+      expect(within(panel).getByRole('link', { name: 'Zatvorite dan' })).toHaveAttribute('href', '/poslovni-dan');
+      expect(within(panel).getByRole('checkbox')).toBeInTheDocument();
+    });
   });
 });

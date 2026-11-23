@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 
 const FOCUSABLE = [
   'a[href]',
@@ -42,33 +42,57 @@ export function Modal({ title, onClose, busy = false, children }: Props) {
     };
   }, []);
 
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      if (!busy) onClose();
-      return;
+  // The keys are heard on the document, not on the dialog: after a click on the backdrop, or when the focused
+  // control was just disabled, focus is on the page and a handler on the dialog would never see the key.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (!busyRef.current) closeRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const nodes = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
+      const heading = headingRef.current;
+      if (nodes.length === 0) {
+        e.preventDefault();
+        heading?.focus();
+        return;
+      }
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      const active = document.activeElement;
+      // Focus is outside the dialog or on a control that is no longer enabled: back in, at the end Tab was heading for.
+      if (active !== heading && !(active instanceof HTMLElement && nodes.includes(active))) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && (active === first || active === heading)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
-    if (e.key !== 'Tab') return;
-    const nodes = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
-    if (nodes.length === 0) {
-      e.preventDefault();
-      return;
-    }
-    const first = nodes[0];
-    const last = nodes[nodes.length - 1];
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    // The control that was pressed is disabled while the request runs: focus would be on a dead button.
     const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === headingRef.current)) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
+    if (busy && active instanceof HTMLElement && dialogRef.current?.contains(active) && active.matches(':disabled')) {
+      headingRef.current?.focus();
     }
-  }
+  }, [busy]);
 
   return (
     <div className="modal-backdrop">
-      <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onKeyDown}>
+      <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <h2 id={titleId} ref={headingRef} tabIndex={-1} className="modal-title">
           {title}
         </h2>

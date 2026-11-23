@@ -165,7 +165,7 @@ export type PaymentMethod = 'cash' | 'card' | 'transfer';
 export const PAYMENT_METHODS: Array<{ value: PaymentMethod; label: string }> = [
   { value: 'cash', label: 'Gotovina' },
   { value: 'card', label: 'Kartica' },
-  { value: 'transfer', label: 'Prenos' },
+  { value: 'transfer', label: 'Virman' },
 ];
 
 export function paymentMethodLabel(method: string): string {

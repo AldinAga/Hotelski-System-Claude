@@ -169,6 +169,44 @@ describe('Poslovanje: saving', () => {
     expect(puts(calls)).toHaveLength(0);
   });
 
+  it('Enter in "Nova stopa" adds the rate and does not save the form (W6)', async () => {
+    const calls = setup();
+    const user = userEvent.setup();
+    await open();
+    await user.type(field('Nova stopa (%)'), '5{Enter}');
+    const rates = screen.getByRole('list', { name: 'Dozvoljene stope za zaduženja (%)' });
+    expect(within(rates).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['20 %×', '10 %×', '5 %×']);
+    expect(field('Nova stopa (%)')).toHaveValue('');
+    expect(puts(calls)).toHaveLength(0);
+    expect(screen.queryByText('Podešavanja su sačuvana.')).toBeNull();
+  });
+
+  it('Enter in "Nova stopa" with something that is not a rate says so and still saves nothing (W6)', async () => {
+    const calls = setup();
+    const user = userEvent.setup();
+    await open();
+    await user.type(field('Nova stopa (%)'), 'abc{Enter}');
+    expect(screen.getByText('Upišite stopu od 0 do 100 %, na primer 20 ili 10,5.')).toBeInTheDocument();
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it('Enter in another field still saves the form (W6)', async () => {
+    const calls = setup({ 'PUT /api/settings/business': { body: SETTINGS } });
+    const user = userEvent.setup();
+    await open();
+    await user.type(field('PDV stopa smeštaja (%)'), '{Enter}');
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+  });
+
+  it('the help for the automatic close time says it is the next calendar day, and suggests the early morning (W6)', async () => {
+    setup();
+    await open();
+    const help = document.getElementById('autoCloseTime-help');
+    expect(help).toHaveTextContent(
+      'Vreme je sledećeg kalendarskog dana posle poslovnog dana: dan 12.11. se zatvara 13.11. u to vreme. Upišite rano jutro, na primer 03:00. Prazno polje znači da dan zatvarate ručno.',
+    );
+  });
+
   it('a rate typed but not added is not lost silently', async () => {
     const calls = setup();
     const user = userEvent.setup();

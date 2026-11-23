@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, type KeyboardEvent } from 'react';
-import { guestsLabel } from '@/lib/business';
+import { guestsGenitive } from '@/lib/business';
 import { formatDay, nightsLabel } from '@/lib/format';
 
 interface Props {
@@ -71,7 +71,7 @@ export function CloseDayDialog({ day, nightsToPost, noShows, busy, onConfirm, on
           {`Zatvaranje dana ${formatDay(day)}`}
         </h2>
         <p id="close-day-text">
-          {`Proknjižiće se ${nightsLabel(nightsToPost)}. Za ${guestsLabel(noShows)} se beleži „nije došao“. Posle toga se otvara sledeći poslovni dan. Zatvaranje se ne može poništiti.`}
+          {`Proknjižiće se ${nightsLabel(nightsToPost)}. ${noShows > 0 ? `Za ${guestsGenitive(noShows)} se beleži „nije došao“. ` : ''}Posle toga se otvara sledeći poslovni dan. Zatvaranje se ne može poništiti.`}
         </p>
         <div className="stay-actions">
           <button type="button" disabled={busy} onClick={onConfirm}>
