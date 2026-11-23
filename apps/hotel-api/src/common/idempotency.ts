@@ -41,6 +41,9 @@ export function requestHash(route: string, subject: string, fields: Record<strin
   return createHash('sha256').update(canonical({ route, subject, fields })).digest('hex');
 }
 
+/** Namespace (first key) of the request-key advisory locks; own value, apart from the other 7_301_00x locks. */
+export const REQUEST_KEY_LOCK_NS = 7_301_010;
+
 /** The tables that hold request keys, each unique per property. */
 export type KeySource = 'folio_line' | 'payment' | 'folio_document';
 
@@ -48,12 +51,24 @@ export type KeySource = 'folio_line' | 'payment' | 'folio_document';
  * Where a request key of the property was used: one lookup across every table
  * that holds keys (preflight F6), so a key is never replayed into another kind
  * of write. null when the key is new.
+ *
+ * Takes a transaction advisory lock on (property, key) first. Uniqueness holds
+ * per table, so without it a payment on one folio and a document on another with
+ * the same key both commit, and a later lookup finds two matches. With it the
+ * second request waits for the first to commit and then sees its row (READ
+ * COMMITTED: each statement has its own snapshot).
+ *
+ * Lock order (constraints.md): this is the LAST lock of every caller, after the
+ * business day (0), counter (5) and folio (6) rows. Nothing takes a lock after
+ * it (only inserts follow), so a holder never waits for anything and the lock
+ * cannot be part of a cycle. Its namespace is its own (REQUEST_KEY_LOCK_NS).
  */
 export async function findKey(
   tx: Tx,
   propertyId: string,
   key: string,
 ): Promise<{ source: KeySource; id: string; request_hash: string } | null> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${REQUEST_KEY_LOCK_NS}::int, hashtext(${`${propertyId}:${key}`}))`);
   const { rows } = await tx.execute<{ source: KeySource; id: string; request_hash: string }>(sql`
     SELECT 'folio_line' AS source, id, request_hash FROM folio_line
      WHERE property_id = ${propertyId} AND idempotency_key = ${key}

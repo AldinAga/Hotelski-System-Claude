@@ -207,6 +207,23 @@ describe('folio documents (e2e)', () => {
     expect(await fd.sql('SELECT 1 FROM folio_document')).toHaveLength(1);
   });
 
+  it('one key on a payment of one stay and a document of another at once: exactly one is written, the other is 409, and a retry of the winner is 200', async () => {
+    const a = await inHouse(0, '2026-11-02', '2026-11-03');
+    const b = await inHouse(1, '2026-11-02', '2026-11-03');
+    await pay(a.stayId, 10_000, 'pay-xtab-0001');
+    await pay(b.stayId, 10_000, 'pay-xtab-0002');
+    // Uniqueness holds per table, so only the key lock (common/idempotency.ts findKey) can stop the second.
+    const key = 'key-xtable-0001';
+    const results = await fd.raceUnderHeldDay(2, () => [pay(a.stayId, 5_000, key), issue(b.stayId, 'receipt', key)]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(results.find((r) => r.status === 409)!.body.code).toBe('idempotency_key_reused');
+    const written = (await fd.sql<{ n: number }>(`SELECT (SELECT count(*) FROM payment WHERE idempotency_key = $1) + (SELECT count(*) FROM folio_document WHERE idempotency_key = $1) AS n`, [key]))[0];
+    expect(Number(written.n)).toBe(1);
+    // The winner's own retry is the first result again, not a conflict.
+    const retry = results[0].status === 201 ? await pay(a.stayId, 5_000, key) : await issue(b.stayId, 'receipt', key);
+    expect(retry.status).toBe(200);
+  });
+
   it('a pro forma of a cancelled stay lists no expected nights', async () => {
     const b = await fd.bookStay({ typeId, planId }, '2026-11-05', '2026-11-07');
     await pay(b.stayId, 10_000, 'pay-cancel-001');
