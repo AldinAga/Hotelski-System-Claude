@@ -225,3 +225,88 @@ describe('messageFor', () => {
     expect(messageFor(new ApiError(409, 'no_availability', 'x', { day: '2026-12-02' }))).toBe('Nema slobodnih jedinica za 2.12.2026.');
   });
 });
+
+describe('api: a request that never answers (W5)', () => {
+  /** A fetch that never answers and rejects the way a browser does once its signal aborts. */
+  function hangingFetch() {
+    const seen: Array<AbortSignal | undefined> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        seen.push(init?.signal ?? undefined);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'TimeoutError')));
+        });
+      }),
+    );
+    return seen;
+  }
+
+  const realTimeout = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout');
+  /** Browsers from before 2022 have no AbortSignal.timeout. */
+  function withoutAbortSignalTimeout() {
+    Object.defineProperty(AbortSignal, 'timeout', { value: undefined, configurable: true, writable: true });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (realTimeout) Object.defineProperty(AbortSignal, 'timeout', realTimeout);
+  });
+
+  it('asks for a 30 second timeout and shows the network error when it fires', async () => {
+    const manual = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(manual.signal);
+    const seen = hangingFetch();
+    const pending = api('/stays/s1/folio/payments', { method: 'POST', body: '{}' }).catch((e: unknown) => e);
+    expect(timeout).toHaveBeenCalledWith(30_000);
+    expect(seen[0]).toBe(manual.signal);
+    manual.abort();
+    const err = await pending;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 0, code: 'network_error' });
+    expect(messageFor(err)).toBe('Server nije dostupan. Proverite vezu i pokušajte ponovo.');
+  });
+
+  it('where AbortSignal.timeout is missing, a timer of 30 seconds aborts the request', async () => {
+    vi.useFakeTimers();
+    withoutAbortSignalTimeout();
+    hangingFetch();
+    let result: unknown = 'pending';
+    const pending = api('/units').catch((e: unknown) => (result = e));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(result).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(result).toMatchObject({ status: 0, code: 'network_error' });
+  });
+
+  it('the fallback timer is cleared once the answer is in', async () => {
+    vi.useFakeTimers();
+    withoutAbortSignalTimeout();
+    mockFetch({ 'GET /api/units': { body: [] } });
+    await api('/units');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a body that stalls after the headers is cut off by the same timeout', async () => {
+    const manual = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(manual.signal);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => ({
+        ok: true,
+        status: 200,
+        text: () =>
+          new Promise<string>((_resolve, reject) => {
+            const abort = () => reject(new DOMException('aborted', 'AbortError'));
+            if (init?.signal?.aborted) abort();
+            else init?.signal?.addEventListener('abort', abort);
+          }),
+      })),
+    );
+    const pending = api('/units').catch((e: unknown) => e);
+    manual.abort();
+    expect(await pending).toMatchObject({ status: 0, code: 'network_error' });
+  });
+});

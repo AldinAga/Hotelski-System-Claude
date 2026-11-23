@@ -42,6 +42,16 @@ function goUnlessThere(path: string): void {
   if (currentPath() !== path) navigation.go(path);
 }
 
+const TIMEOUT_MS = 30_000;
+
+/** AbortSignal.timeout where the browser has it, a timer otherwise (it is missing before 2022). */
+function timeoutSignal(): { signal: AbortSignal; clear: () => void } {
+  if (typeof AbortSignal.timeout === 'function') return { signal: AbortSignal.timeout(TIMEOUT_MS), clear: () => undefined };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
 async function readBody(res: Response): Promise<unknown> {
   const text = await res.text();
   if (!text) return undefined;
@@ -78,13 +88,19 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   headers.set('accept', 'application/json');
   if (init.body !== undefined && !headers.has('content-type')) headers.set('content-type', 'application/json');
 
+  // A hung API must not leave a dialog busy for ever: after 30 s the request counts as a lost connection.
+  // The caller keeps its key, so the retry is the same action.
+  const timeout = timeoutSignal();
   let res: Response;
+  let body: unknown;
   try {
-    res = await fetch(`/api${path}`, { ...init, headers, credentials: 'same-origin' });
+    res = await fetch(`/api${path}`, { signal: timeout.signal, ...init, headers, credentials: 'same-origin' });
+    body = await readBody(res);
   } catch {
     throw new ApiError(0, 'network_error', '', null);
+  } finally {
+    timeout.clear();
   }
-  const body = await readBody(res);
 
   if (!res.ok) {
     const err = errorFrom(res.status, body);
