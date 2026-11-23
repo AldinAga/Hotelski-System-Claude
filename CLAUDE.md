@@ -90,7 +90,26 @@ isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_te
   `docker rmi hotel-claude:buildx-check` i `rm -rf /volume1/ci/hotel/buildx-check`. Baze i Redis se samo pokreću ako nedostaju
   (`up -d --no-recreate --wait postgres hub-postgres redis`, nikad se ne prave ponovo), a `api` i
   `web` idu sa `up -d --no-deps --remove-orphans --wait api web`. Čišćenje: ostaju 3 najnovije
-  `hotel-claude:<sha>` oznake. Ne dira ništa van `claude-hotel`, `hotel-claude` i `/volume1/ci/hotel/deploy`.
+  `hotel-claude:<sha>` oznake. Ne dira ništa van `claude-hotel`, `hotel-claude` `/volume1/ci/hotel/deploy` i `/volume1/ci/hotel/backup`.
+- **Kopija baze pre nove slike:** posle provere baza, a pre oznake `:staging`, `deploy.sh` pokreće
+  `infrastructure/nas/backup-db.sh <sha>`: `pg_dump` kroz `docker exec hotel-postgres-claude` (nikad `docker run`,
+  kontejner se ne gasi) u `/volume1/ci/hotel/backup/<sha>.sql.gz` (direktorijum `700`, fajl `600`; korisnik, baza i
+  lozinka dolaze iz okruženja kontejnera i ne ispisuju se). Prazan, prekinut ili neuspeo dump zaustavlja deploy pre
+  bilo koje promene oznake ili kontejnera. Ostaju 3 najnovije kopije. Prvi deploy, bez kontejnera baze, korak
+  preskače. `--dry-run` i `--build-check` ne stižu do njega (NAS ostaje netaknut). Ime kopije je SHA nove slike,
+  a sadrži stanje baze pre njenog prvog starta. Ponovni deploy istog SHA (npr. posle izmene `hotel.env`) postojeću nepraznu kopiju
+  ne dira i preskače dump, da se ne prepiše stanje pre migracije.
+  **Povratak (ručno, vlasnik):** (1) ako nijedna migracija nije prošla: `docker tag hotel-claude:<prethodni sha>
+  hotel-claude:staging` (`docker images hotel-claude` pokazuje oznake), pa isti `docker compose … up -d --no-deps api web`
+  kao u deploy-u. (2) Ako je neka migracija već prošla: isti povratak slike, pa vraćanje baze iz kopije:
+  `gunzip -c /volume1/ci/hotel/backup/<sha>.sql.gz | docker exec -i hotel-postgres-claude sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`
+  (kopija ima `--clean --if-exists`, pa prepisuje postojeće objekte). Kopija je i jedini način da se poništi prvo
+  zatvaranje poslovnog dana. Ništa od toga ne radi skripta.
+- **Migracije imaju otisak:** `schema_migrations.content_hash` (sha256 fajla, krajevi redova normalizovani). Primenjen
+  fajl koji je kasnije izmenjen zaustavlja start API-ja greškom koja ga imenuje; izmena ide u novu migraciju. Redovi iz
+  1a bez otiska dobijaju otisak fajla sa diska pri prvom startu (log `Migrate`).
+- **Rokovi baze:** pool čeka vezu 10 s, naredba traje najviše 60 s, čekanje na zaključan red 30 s (`db/pool.ts`);
+  migrator te rokove sam skida. Istek je `503 database_busy`, a `/health` pita bazu (2 s) i bez nje vraća 503.
 - **Neuspelo pokretanje API-ja:** `hotel-api-claude` se ne gasi (nema crash-loop-a ni mejlova). Greška
   (bez tajni) je u `docker logs hotel-api-claude`, a do popravke i restarta kontejner je `Up (unhealthy)`
   i `/health` vraća 503.

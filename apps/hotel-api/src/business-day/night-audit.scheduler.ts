@@ -28,6 +28,10 @@ export type AutoCloseResult = 'closed' | 'not_due' | 'blocked' | 'disabled';
 
 const TICK_MS = 60_000;
 
+/** Stored when the automatic close fails with anything but a DomainError (the business-day screen shows it). */
+export const AUTO_CLOSE_FAILED_TEXT =
+  'Automatsko zatvaranje dana nije uspelo zbog greške sistema. Pokušavamo ponovo svakog minuta; ako se ponavlja, obratite se podršci.';
+
 /** 'YYYY-MM-DD HH:MM' of `at` in `timezone` (24-hour clock). */
 export function localDateTime(at: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -112,12 +116,24 @@ export class NightAuditScheduler implements OnModuleDestroy {
       await this.audit.close(day, null, 'auto');
       return 'closed';
     } catch (err) {
-      if (!(err instanceof DomainError)) throw err;
-      const error = { at: now.toISOString(), code: err.code, details: err.details ?? null };
-      await this.db.execute(sql`
-        UPDATE business_day SET last_auto_error = ${JSON.stringify(error)}::jsonb
-         WHERE property_id = ${propertyId} AND status = 'open'`);
-      return 'blocked';
+      if (err instanceof DomainError) {
+        await this.storeError(propertyId, now, err.code, err.details ?? null);
+        return 'blocked';
+      }
+      // Anything else (a database error, a bug): the driver's text can hold hosts or values, so only a fixed text
+      // is stored, under the code the screen already knows. The error still goes to the timer, which logs it and
+      // tries again at the next tick.
+      await this.storeError(propertyId, now, 'close_failed', { message: AUTO_CLOSE_FAILED_TEXT }).catch((storeErr: unknown) =>
+        this.log.error(`could not store the close error: ${storeErr instanceof Error ? storeErr.name : 'error'}`),
+      );
+      throw err;
     }
+  }
+
+  private async storeError(propertyId: string, at: Date, code: string, details: unknown): Promise<void> {
+    const error = { at: at.toISOString(), code, details };
+    await this.db.execute(sql`
+      UPDATE business_day SET last_auto_error = ${JSON.stringify(error)}::jsonb
+       WHERE property_id = ${propertyId} AND status = 'open'`);
   }
 }

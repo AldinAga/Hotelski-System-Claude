@@ -1,6 +1,7 @@
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { migrate } from '../src/db/migrate';
+import { poolConfig } from '../src/db/pool';
 import * as schema from '../src/db/schema';
 
 export interface TestDb {
@@ -60,7 +61,7 @@ export async function ensureDatabase(name: string, fresh = false): Promise<void>
 export async function createScratchPool(name: string): Promise<Pool> {
   const prefixed = testDbName(name);
   await ensureDatabase(prefixed, true);
-  return new Pool({ connectionString: urlFor(prefixed) });
+  return new Pool(poolConfig(urlFor(prefixed)));
 }
 
 // One database per Jest worker, created and migrated once per worker process.
@@ -70,7 +71,7 @@ export async function createTestDb(opts: { poolMax?: number } = {}): Promise<Tes
   const name = testDbName(`hotel_test_${process.env.JEST_WORKER_ID ?? '1'}`);
   await ensureDatabase(name);
   const connectionString = urlFor(name);
-  const pool = new Pool({ connectionString, ...(opts.poolMax ? { max: opts.poolMax } : {}) });
+  const pool = new Pool(poolConfig(connectionString, opts.poolMax ? { max: opts.poolMax } : {}));
   await migrate(pool);
   const db = drizzle(pool, { schema });
   return {

@@ -100,7 +100,9 @@ describe('phase 1b routes in safe mode (e2e)', () => {
       const res = await send(fd.owner);
       const blocked = res.status === 403 && res.body?.code === 'safe_mode_blocked';
       const listed = ALLOWED_IN_SAFE_MODE.has(r.key);
-      if (listed && blocked) wronglyBlocked.push(`${r.key} (${r.action})`);
+      // Any 403 on a listed route counts, not only safe_mode_blocked: the owner has every role, so a 403 here is the
+      // licence guard refusing for another reason (a module the licence does not carry, for example).
+      if (listed && res.status === 403) wronglyBlocked.push(`${r.key} (${r.action}) -> ${res.body?.code ?? ''}`);
       if (!listed && !blocked) wronglyAllowed.push(`${r.key} (${r.action}) -> ${res.status} ${res.body?.code ?? ''}`);
       // Whatever a listed route answers (200, 404, 422), it was not refused for the licence;
       // 401 (not signed in) or route_not_classified would mean the request never reached the handler.

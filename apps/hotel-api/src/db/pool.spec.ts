@@ -13,6 +13,15 @@ describe('createPool', () => {
     }
   });
 
+  it('waits 10 s for a connection and cuts a statement at 60 s and a lock wait at 30 s', async () => {
+    const pool = createPool('postgres://u:p@127.0.0.1:1/none');
+    try {
+      expect(pool.options).toMatchObject({ connectionTimeoutMillis: 10_000, statement_timeout: 60_000, lock_timeout: 30_000 });
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('refuses to start without a connection string', () => {
     expect(() => createPool('')).toThrow('DATABASE_URL is not set');
   });

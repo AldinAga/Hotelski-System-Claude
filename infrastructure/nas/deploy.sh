@@ -22,12 +22,16 @@
 #      Dockerfile build stage; the registry .npmrc is a BuildKit secret mount, so it is
 #      in no layer, ARG, ENV or log. hotel-web is built with
 #      HOTEL_API_URL=http://hotel-api-claude:4200 (Next fixes the rewrite at build).
-#   5. refuse if the compose file would recreate a database or Redis container;
-#      only then tag hotel-claude:staging.
-#   6. postgres, hub-postgres and redis: started only if missing or stopped,
+#   5. refuse if the compose file would recreate a database or Redis container.
+#   6. backup-db.sh: pg_dump of the installation database through `docker exec` into
+#      /volume1/ci/hotel/backup/<sha>.sql.gz (3 newest kept). A failed or empty dump
+#      stops the deploy before anything below changes. Not reached by --dry-run or
+#      --build-check.
+#   7. only then tag hotel-claude:staging.
+#   8. postgres, hub-postgres and redis: started only if missing or stopped,
 #      never recreated (--no-recreate); then api and web alone
 #      (--no-deps --remove-orphans --wait).
-#   7. keep the 3 newest hotel-claude:<sha> tags; nothing else is touched.
+#   9. keep the 3 newest hotel-claude:<sha> tags; nothing else is touched.
 #
 # Run from a machine holding ~/.ssh/synology_claude_ci and an authenticated gh. Nothing
 # started here may exit (Synology mails for every stopped container): BuildKit steps
@@ -128,6 +132,13 @@ nas "$COMPOSE config --hash='postgres,hub-postgres,redis'" | while read -r svc h
   fi
   echo "   $svc unchanged"
 done
+
+# A copy of the installation database before the new image starts for the first
+# time: hotel-api migrates inside its own start, and a migration that fails half way
+# leaves nothing to go back to. A failed or empty dump stops the deploy here, before
+# any tag or container changes. backup-db.sh is the deployed ref's copy.
+echo "==> backup of the installation database (before the new image starts)"
+nas "bash $DEPLOY/infrastructure/nas/backup-db.sh $SHA"
 
 echo "==> hotel-claude:staging -> $SHORT"
 nas "$DOCKER tag hotel-claude:$SHA hotel-claude:staging"
