@@ -97,7 +97,8 @@ isto kroz `docker exec` u `hotel-ci-runner-claude` (bez prefiksa, baze `hotel_te
   lozinka dolaze iz okruženja kontejnera i ne ispisuju se). Prazan, prekinut ili neuspeo dump zaustavlja deploy pre
   bilo koje promene oznake ili kontejnera. Ostaju 3 najnovije kopije. Prvi deploy, bez kontejnera baze, korak
   preskače. `--dry-run` i `--build-check` ne stižu do njega (NAS ostaje netaknut). Ime kopije je SHA nove slike,
-  a sadrži stanje baze pre njenog prvog starta.
+  a sadrži stanje baze pre njenog prvog starta. Ponovni deploy istog SHA (npr. posle izmene `hotel.env`) postojeću nepraznu kopiju
+  ne dira i preskače dump, da se ne prepiše stanje pre migracije.
   **Povratak (ručno, vlasnik):** (1) ako nijedna migracija nije prošla: `docker tag hotel-claude:<prethodni sha>
   hotel-claude:staging` (`docker images hotel-claude` pokazuje oznake), pa isti `docker compose … up -d --no-deps api web`
   kao u deploy-u. (2) Ako je neka migracija već prošla: isti povratak slike, pa vraćanje baze iz kopije:

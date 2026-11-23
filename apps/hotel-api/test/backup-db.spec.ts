@@ -108,6 +108,32 @@ esac
     expect(r.stdout).toContain('nothing to copy');
   });
 
+  it('a rerun for the same sha keeps the first dump and does not call pg_dump again', async () => {
+    fakeDocker({});
+    expect((await backup()).code).toBe(0);
+    const file = join(backups, `${SHA}.sql.gz`);
+    const first = readFileSync(file);
+    // The database has moved on (migrated); a second dump would differ and must not land.
+    fakeDocker({ dump: DUMP.replace('t (id int)', 't (id int, migrated int)') });
+    writeFileSync(join(dir, 'calls.log'), '');
+    const logged = readFileSync(docker, 'utf8').replace('case "$1" in', `echo "$1" >> '${join(dir, 'calls.log')}'\ncase "$1" in`);
+    writeFileSync(docker, logged);
+    const r = await backup();
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('already exists');
+    expect(readFileSync(join(dir, 'calls.log'), 'utf8')).not.toContain('exec');
+    expect(readFileSync(file).equals(first)).toBe(true);
+    expect(readdirSync(backups)).toEqual([`${SHA}.sql.gz`]);
+  });
+
+  it('an empty file of the same name is not a backup and is replaced', async () => {
+    fakeDocker({});
+    mkdirSync(backups, { recursive: true });
+    writeFileSync(join(backups, `${SHA}.sql.gz`), '');
+    expect((await backup()).code).toBe(0);
+    expect(gunzipSync(readFileSync(join(backups, `${SHA}.sql.gz`))).toString()).toBe(DUMP);
+  });
+
   it('keeps the 3 newest dumps', async () => {
     fakeDocker({});
     mkdirSync(backups, { recursive: true });

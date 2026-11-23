@@ -27,6 +27,13 @@ BACKUP_DIR="${BACKUP_DIR:-/volume1/ci/hotel/backup}"
 KEEP="${KEEP:-3}"
 CONTAINER="${CONTAINER:-hotel-postgres-claude}"
 
+# A rerun of the same sha (deploy.sh again after editing hotel.env) must not replace the
+# pre-migration copy with a dump of the already migrated database.
+if [ -s "$BACKUP_DIR/$SHA.sql.gz" ]; then
+  echo "   backup: $BACKUP_DIR/$SHA.sql.gz already exists, kept (no new dump)"
+  exit 0
+fi
+
 # Found by the compose labels, as deploy.sh finds its containers; the name is only the fallback for the message.
 FOUND="$("$DOCKER" ps -a --filter label=com.docker.compose.project=claude-hotel \
   --filter label=com.docker.compose.service=postgres --format '{{.Names}}')"
