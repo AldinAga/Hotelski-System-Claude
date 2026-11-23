@@ -268,6 +268,75 @@ describe('ReservationDetail: check-in, check-out, guests and mail', () => {
     expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
   });
 
+  it('a reservation still on request has no check-in button and says why (W6)', async () => {
+    mockFetch(routes('VALID', { [`GET /api/reservations/${RES}`]: { body: { ...RESERVATION, status: 'requested' } } }));
+    render(<ReservationDetail id={RES} />);
+    expect(await screen.findByText('Rezervacija nije potvrđena, pa se gost ne može prijaviti.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull();
+  });
+
+  it('a receptionist at a check-out with a credit is told who refunds it (W6)', async () => {
+    const inHouse = { ...RESERVATION, stays: [{ ...RESERVATION.stays[0], status: 'in_house', unitId: 'u1' }] };
+    mockFetch(
+      routes('VALID', {
+        'GET /api/auth/me': { body: { role: 'receptionist' } },
+        [`GET /api/reservations/${RES}`]: { body: inHouse },
+        'GET /api/stays/s1/check-out-preview': {
+          body: { businessDate: '2026-10-28', keptUntil: '2026-11-03', earlyDeparture: false, nightsToPost: [], nightsToRelease: [], balanceMinor: -500_000 },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ReservationDetail id={RES} />);
+    await user.click(await screen.findByRole('button', { name: 'Odjavi gosta' }));
+    expect(await screen.findByText('Povraćaj preplate radi menadžer ili vlasnik.')).toBeInTheDocument();
+  });
+
+  it('after a check-in the button is gone and focus goes to the page heading, not to nothing (W7)', async () => {
+    let reads = 0;
+    mockFetch(
+      routes('VALID', {
+        [`GET /api/reservations/${RES}`]: () => {
+          reads += 1;
+          const status = reads === 1 ? 'expected' : 'in_house';
+          return { body: { ...RESERVATION, stays: [{ ...RESERVATION.stays[0], status, unitId: 'u1' }] } };
+        },
+        'POST /api/stays/s1/check-in': { body: { stayId: 's1', status: 'in_house', version: 3 } },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ReservationDetail id={RES} />);
+    const button = await screen.findByRole('button', { name: 'Prijavi gosta' });
+    await user.click(button);
+    await screen.findByText('Gost je prijavljen.');
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: 'Prijavi gosta' })).toBeNull());
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+  });
+
+  it('after a check-out focus goes to the page heading as well (W7)', async () => {
+    let reads = 0;
+    mockFetch(
+      routes('VALID', {
+        [`GET /api/reservations/${RES}`]: () => {
+          reads += 1;
+          const status = reads === 1 ? 'in_house' : 'checked_out';
+          return { body: { ...RESERVATION, stays: [{ ...RESERVATION.stays[0], status, unitId: 'u1' }] } };
+        },
+        'GET /api/stays/s1/check-out-preview': {
+          body: { businessDate: '2026-10-28', keptUntil: '2026-11-03', earlyDeparture: false, nightsToPost: [], nightsToRelease: [], balanceMinor: 0 },
+        },
+        'POST /api/stays/s1/check-out': { body: { stayId: 's1', status: 'checked_out', version: 3, departure: '2026-11-03' } },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ReservationDetail id={RES} />);
+    await user.click(await screen.findByRole('button', { name: 'Odjavi gosta' }));
+    await user.click(await screen.findByRole('button', { name: 'Potvrdi odjavu' }));
+    await screen.findByText('Gost je odjavljen.');
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: 'Odjavi gosta' })).toBeNull());
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+  });
+
   it('without an open business day check-in is not offered', async () => {
     mockFetch(routes('VALID', { 'GET /api/business-day': apiError(500, 'unknown') }));
     render(<ReservationDetail id={RES} />);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, send } from '@/lib/api';
 import { formatDate, formatDay, formatRsd, nightsBetween, nightsLabel } from '@/lib/format';
 import { messageFor } from '@/lib/messages';
@@ -13,6 +13,7 @@ import {
   type UnitType,
 } from '@/lib/types';
 import { useLicenceMode } from '@/lib/use-read-only';
+import { useRole } from '@/lib/use-role';
 import { ReservationMessages } from './reservation-messages';
 import { StayActions } from './stay-actions';
 import { StayGuests } from './stay-guests';
@@ -30,6 +31,10 @@ const MOVABLE_RESERVATION = new Set(['requested', 'confirmed']);
 /** One reservation with the real stay dates (the calendar shows them clipped to its range). */
 export function ReservationDetail({ id }: { id: string }) {
   const licence = useLicenceMode();
+  const role = useRole();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  // Counts the page reads that follow a check-in or check-out: after each, focus is put back if it was lost.
+  const [refocus, setRefocus] = useState(0);
   const readOnly = licence !== 'full';
   const [r, setR] = useState<Reservation | null>(null);
   const [businessDate, setBusinessDate] = useState<string | null>(null);
@@ -102,7 +107,15 @@ export function ReservationDetail({ id }: { id: string }) {
   async function changed(text?: string) {
     setNotice(text ?? null);
     await load().catch((err: unknown) => setError(messageFor(err)));
+    setRefocus((n) => n + 1);
   }
+
+  useEffect(() => {
+    if (refocus === 0) return;
+    // The button that was pressed is gone after a check-in or check-out: focus goes to the heading, not to the page.
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) headingRef.current?.focus();
+  }, [refocus]);
 
   const canCancel =
     r !== null && CANCELLABLE.has(r.status) && !r.stays.some((s) => s.status === 'in_house' || s.status === 'checked_out');
@@ -112,7 +125,7 @@ export function ReservationDetail({ id }: { id: string }) {
       <p>
         <a href="/kalendar">‹ Kalendar</a>
       </p>
-      <h1 tabIndex={-1}>{r ? `Rezervacija ${r.number}` : 'Rezervacija'}</h1>
+      <h1 tabIndex={-1} ref={headingRef}>{r ? `Rezervacija ${r.number}` : 'Rezervacija'}</h1>
       {error && (
         <p role="alert" className="error">
           {error}
@@ -180,6 +193,7 @@ export function ReservationDetail({ id }: { id: string }) {
                     businessDate={businessDate}
                     today={lateness.today}
                     lagDays={lateness.lagDays}
+                    role={role}
                     licence={licence}
                     onChanged={changed}
                   />
