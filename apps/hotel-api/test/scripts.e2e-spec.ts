@@ -7,11 +7,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { SetupService } from '../src/auth/setup.service';
+import { totpGenerate } from '../src/auth/totp';
 import { CentralAdminClient } from '../src/licensing/central-admin.client';
 import { parseRootKeySet } from '../src/licensing/licensing.config';
 import { SecretBox } from '../src/licensing/secret-box';
 import { createTestApp, type TestApp } from './app';
+import { PASSWORD, seedUser, type SeededUser } from './auth-helpers';
 import { startFakeCentralAdmin, type FakeCentralAdmin } from './fake-central-admin';
+import { DAY_MS, NOW, startFrontDesk, type FrontDesk } from './front-desk';
 
 // The operator scripts of Task 13, run as the owner would run them: a child
 // `node` process against real HTTP servers.
@@ -20,6 +23,7 @@ const run = promisify(execFile);
 const ROOT = resolve(__dirname, '../../..');
 const SMOKE = resolve(ROOT, 'scripts/smoke-1a.mjs');
 const PUBLISH = resolve(ROOT, 'scripts/publish-manifest.mjs');
+const SMOKE_1B = resolve(ROOT, 'scripts/smoke-1b.mjs');
 
 interface Outcome {
   code: number;
@@ -325,4 +329,643 @@ describe('scripts/publish-manifest.mjs (e2e)', () => {
     expect(out.stderr).toMatch(/HOTEL_PUBLISHER_TOKEN nije postavljen/);
     expect(received).toEqual([]);
   });
+});
+
+// Task 14: the resumable phase 1b smoke. The API runs on a movable fake clock
+// (startFrontDesk), the script in a child process on real time: so the script
+// takes every date from GET /business-day, and the tests pass --totp computed
+// on the fake clock (--totp-file computes on real time; that path is the
+// smoke-1a one and is tested there).
+describe('scripts/smoke-1b.mjs (e2e)', () => {
+  const LONG = 120_000;
+  let fd: FrontDesk;
+  let api: string;
+  let owner: SeededUser;
+  let clock = NOW;
+
+  const seedOwner = async () => {
+    owner = await seedUser(fd.ta.testDb, 'owner', { email: 'vlasnik@hotel.test' });
+  };
+  const setClock = (at: Date) => {
+    clock = at;
+    fd.setNow(at);
+  };
+  /** A bigger move (sessions idle out after 12 h): the front-desk cookies are issued again. */
+  const jump = async (at: Date) => {
+    clock = at;
+    await fd.travel(at);
+  };
+  /** Runs the smoke 60 s after the previous run (a TOTP code is single-use per 30 s step). */
+  const smoke = (extra: string[] = [], o: { totp?: boolean } = {}) => {
+    setClock(new Date(clock.getTime() + 60_000));
+    const totp = o.totp === false ? [] : ['--totp', totpGenerate(owner.totpSecret!, clock)];
+    return node(SMOKE_1B, ['--api', api, '--email', owner.email, ...totp, ...extra], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+  };
+  const lines = (out: Outcome) => out.stdout.trim().split('\n');
+  const q = <T = Record<string, unknown>>(text: string) => fd.sql<T>(text);
+  const smokeReservations = () =>
+    q(`SELECT s.status AS stay FROM stay s JOIN reservation r ON r.id = s.reservation_id
+        JOIN guest g ON g.id = r.holder_guest_id WHERE g.last_name = 'Test 1b' ORDER BY s.arrival, r.number`);
+
+  beforeAll(async () => {
+    fd = await startFrontDesk();
+    await fd.app.listen(0, '127.0.0.1');
+    api = `http://127.0.0.1:${(fd.app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  beforeEach(async () => {
+    await fd.reset();
+    clock = NOW;
+    await seedOwner();
+  });
+  afterEach(async () => {
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_close ON folio`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_document ON folio_document`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_day ON business_day`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_line ON folio_line`);
+    await fd.sql(`DROP TRIGGER IF EXISTS t14_on_payment ON payment`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_close()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_document()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_day()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_line()`);
+    await fd.sql(`DROP FUNCTION IF EXISTS t14_on_payment()`);
+  });
+  afterAll(async () => {
+    await fd?.close();
+  });
+
+  const STEPS_FIRST_RUN = [
+    'health',
+    'sign-in',
+    'licence',
+    'leftovers',
+    'business day',
+    'unit type SMOKE',
+    'rate plan SMOKE',
+    'reservation',
+    'extra guest',
+    'check-in',
+    'charge',
+    'cash payment',
+    'close',
+    'card payment',
+    'check-out',
+    'receipt',
+    'folio check',
+    'confirmation message',
+  ];
+  const stepNames = (out: Outcome) =>
+    lines(out)
+      .filter((l) => !l.startsWith('OK   smoke 1b'))
+      .map((l) => l.replace(/^(OK|SKIP|FAIL) +/, '').split(':')[0]);
+
+  it(
+    'first run with --allow-close: only OK lines, every step in order, the day is closed, one night, a receipt, a sent confirmation',
+    async () => {
+      const code = totpGenerate(owner.totpSecret!, new Date(clock.getTime() + 60_000));
+      const timer = setInterval(() => void fd.dispatcher.runOnce().catch(() => undefined), 150);
+      let out: Outcome;
+      try {
+        out = await smoke(['--allow-close', '--mail-to', 'gost@hotel.test']);
+      } finally {
+        clearInterval(timer);
+      }
+      expect(out.stdout).not.toMatch(/FAIL|SKIP/);
+      expect(out.code).toBe(0);
+      expect(lines(out).every((l) => l.startsWith('OK '))).toBe(true);
+      expect(stepNames(out)).toEqual(STEPS_FIRST_RUN);
+      expect(out.stdout).toMatch(/^OK +close: dan 2026-11-02, noćenja 1, no-show 0$/m);
+      expect(out.stdout).toMatch(/^OK +receipt: N-2026-000001$/m);
+      expect(out.stdout).toMatch(/^OK +smoke 1b je prošao$/m);
+      // Neither the password, nor the TOTP secret or code, nor the guest's address reach the output.
+      const all = out.stdout + out.stderr;
+      for (const secret of [PASSWORD, owner.totpSecret!, code, 'gost@hotel.test', 'otpauth']) expect(all).not.toContain(secret);
+
+      expect(await q(`SELECT day::text AS day, status FROM business_day ORDER BY day`)).toEqual([
+        { day: '2026-11-02', status: 'closed' },
+        { day: '2026-11-03', status: 'open' },
+      ]);
+      expect(await smokeReservations()).toEqual([{ stay: 'checked_out' }]);
+      expect(await q(`SELECT count(*)::int AS n FROM stay_guest`)).toEqual([{ n: 2 }]);
+      expect(await q(`SELECT kind, amount_minor::int AS amount, source_type FROM folio_line ORDER BY kind`)).toEqual([
+        { kind: 'accommodation', amount: 500_000, source_type: 'night_audit' },
+        { kind: 'service', amount: 50_000, source_type: 'manual' },
+      ]);
+      expect(await q(`SELECT method, amount_minor::int AS amount FROM payment ORDER BY method`)).toEqual([
+        { method: 'card', amount: 500_000 },
+        { method: 'cash', amount: 50_000 },
+      ]);
+      expect(await q(`SELECT status FROM folio`)).toEqual([{ status: 'closed' }]);
+      expect(await q(`SELECT number FROM folio_document`)).toEqual([{ number: 'N-2026-000001' }]);
+      expect(fd.mail.sent.map((m) => m.to)).toEqual(['gost@hotel.test']);
+    },
+    LONG,
+  );
+
+  it(
+    'a second run on the same day skips the close (the business day is already tomorrow) and still ends in a closed folio with one night',
+    async () => {
+      expect((await smoke(['--allow-close'])).code).toBe(0);
+      const out = await smoke(['--allow-close']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^SKIP close: poslovni dan je već sutrašnji$/m);
+      expect(out.stdout).toMatch(/^OK +business day: 2026-11-03$/m);
+      expect(out.stdout).toMatch(/^OK +receipt: N-2026-000002$/m);
+      expect(await q(`SELECT day::text AS day, status FROM business_day ORDER BY day`)).toEqual([
+        { day: '2026-11-02', status: 'closed' },
+        { day: '2026-11-03', status: 'open' },
+      ]);
+      expect(await smokeReservations()).toEqual([{ stay: 'checked_out' }, { stay: 'checked_out' }]);
+      // One night per stay, whichever way it was posted.
+      expect(await q(`SELECT source_type, count(*)::int AS n FROM folio_line WHERE kind = 'accommodation' GROUP BY source_type ORDER BY 1`)).toEqual([
+        { source_type: 'check_out', n: 1 },
+        { source_type: 'night_audit', n: 1 },
+      ]);
+    },
+    LONG,
+  );
+
+  it(
+    'without --allow-close nothing is closed: the close is skipped, check-out on the arrival day posts the one night',
+    async () => {
+      const out = await smoke();
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^SKIP close: bez --allow-close dan se ne zatvara; odjava knjiži noć$/m);
+      expect(await q(`SELECT day::text AS day, status FROM business_day ORDER BY day`)).toEqual([{ day: '2026-11-02', status: 'open' }]);
+      expect(await q(`SELECT kind, source_type FROM folio_line WHERE kind = 'accommodation'`)).toEqual([
+        { kind: 'accommodation', source_type: 'check_out' },
+      ]);
+      expect(await q(`SELECT status FROM folio`)).toEqual([{ status: 'closed' }]);
+      expect(await q(`SELECT number FROM folio_document`)).toEqual([{ number: 'N-2026-000001' }]);
+    },
+    LONG,
+  );
+
+  it(
+    'a business day that lags behind the calendar is not closed without --allow-close: FAIL, and nothing is written',
+    async () => {
+      expect((await smoke()).code).toBe(0); // opens 2026-11-02 and leaves it open
+      await jump(new Date('2026-11-04T08:00:00Z'));
+      const before = await smokeReservations();
+      const out = await smoke();
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL business day: poslovni dan 2026-11-02 kasni; pokrenite sa --allow-close$/m);
+      expect(out.stdout).not.toMatch(/unit type SMOKE/);
+      expect(await q(`SELECT count(*)::int AS n FROM business_day WHERE status = 'closed'`)).toEqual([{ n: 0 }]);
+      expect(await smokeReservations()).toEqual(before);
+    },
+    LONG,
+  );
+
+  it(
+    'with --allow-close a lagging day is closed day by day, each close reports its nights and no-shows (real data), then the run goes on',
+    async () => {
+      const t = await fd.pricedType('FD', 1);
+      expect((await smoke()).code).toBe(0); // opens 2026-11-02
+      await fd.bookStay(t, '2026-11-02', '2026-11-03'); // expected, never arrives
+      await jump(new Date('2026-11-04T08:00:00Z'));
+      const out = await smoke(['--allow-close']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +close: dan 2026-11-02, noćenja \d+, no-show 1$/m);
+      expect(out.stdout).toMatch(/^OK +close: dan 2026-11-03, noćenja 0, no-show 0$/m);
+      expect(out.stdout).toMatch(/^OK +business day: 2026-11-04$/m);
+      expect(await q(`SELECT status FROM stay WHERE status = 'no_show'`)).toEqual([{ status: 'no_show' }]);
+      expect(await q(`SELECT day::text AS day FROM business_day WHERE status = 'closed' ORDER BY day`)).toEqual([
+        { day: '2026-11-02' },
+        { day: '2026-11-03' },
+        { day: '2026-11-04' },
+      ]);
+    },
+    LONG,
+  );
+
+  it(
+    'a guest who should have left blocks the close: the FAIL names the reservation and the run stops',
+    async () => {
+      const t = await fd.pricedType('FD', 1);
+      const stay = await fd.inHouse({ ...t, unitId: t.unitIds[0] }, '2026-11-02', '2026-11-03');
+      const [{ number }] = await q<{ number: string }>(`SELECT number FROM reservation WHERE id = '${stay.reservationId}'`);
+      await jump(new Date('2026-11-04T08:00:00Z'));
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^OK +close: dan 2026-11-02, /m);
+      expect(out.stdout).toContain(`FAIL business day: dan 2026-11-03 se ne može zatvoriti`);
+      expect(out.stdout).toContain(number);
+      expect(out.stdout).not.toMatch(/unit type SMOKE/);
+      expect(await smokeReservations()).toEqual([]);
+    },
+    LONG,
+  );
+
+  // A first run (with --allow-close) makes type SMOKE, units S-1 and S-2 and plan SMOKE and leaves the
+  // business day on 2026-11-03; the stays below are for that day.
+  const afterFirstRun = async () => {
+    expect((await smoke(['--allow-close'])).code).toBe(0);
+    const [r] = await q<{ s1: string; s2: string; plan: string }>(
+      `SELECT (SELECT id FROM unit WHERE name = 'S-1') AS s1, (SELECT id FROM unit WHERE name = 'S-2') AS s2,
+              (SELECT id FROM rate_plan WHERE code = 'SMOKE') AS plan`,
+    );
+    return r;
+  };
+  const SMOKE_HOLDER = { firstName: 'Smoke', lastName: 'Test 1b' };
+  /** An in-house stay for the business day 2026-11-03 on a given unit. */
+  const inHouseOn = async (planId: string, unitId: string, holder: { firstName: string; lastName: string }) => {
+    const b = await fd.bookStay({ typeId: '', planId, unitId }, '2026-11-03', '2026-11-04', { holder });
+    const res = await fd.post(`/stays/${b.stayId}/check-in`, { version: b.version });
+    expect(res.status).toBe(200);
+    return b.stayId;
+  };
+  const paymentsOf = (stayId: string) =>
+    q<{ method: string; amount: number }>(
+      `SELECT p.method, p.amount_minor::int AS amount FROM payment p JOIN folio f ON f.id = p.folio_id WHERE f.stay_id = '${stayId}' ORDER BY p.created_at`,
+    );
+
+  it(
+    'a guest of Smoke Test 1b left in the house on S-1 with a debt is paid by card and checked out first',
+    async () => {
+      const s = await afterFirstRun();
+      const debt = await inHouseOn(s.plan, s.s1, SMOKE_HOLDER);
+      expect((await fd.post(`/stays/${debt}/folio/charges`, { kind: 'service', description: 'Ostatak', amountMinor: 70_000, key: 'left-charge-0001' })).status).toBe(201);
+      const out = await smoke(['--allow-close']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +leftovers: izmireno i odjavljeno 1$/m);
+      expect(await q(`SELECT status FROM stay WHERE id = '${debt}'`)).toEqual([{ status: 'checked_out' }]);
+      expect(await paymentsOf(debt)).toEqual([{ method: 'card', amount: 570_000 }]);
+      expect(await q(`SELECT status FROM folio WHERE stay_id = '${debt}'`)).toEqual([{ status: 'closed' }]);
+    },
+    LONG,
+  );
+
+  it(
+    'a guest of Smoke Test 1b left in the house on S-2 with a credit gets it back in cash and is checked out first',
+    async () => {
+      const s = await afterFirstRun();
+      const credit = await inHouseOn(s.plan, s.s2, SMOKE_HOLDER);
+      expect((await fd.post(`/stays/${credit}/folio/payments`, { method: 'cash', amountMinor: 2_000_000, key: 'left-credit-0001' })).status).toBe(201);
+      const out = await smoke(['--allow-close']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +leftovers: izmireno i odjavljeno 1$/m);
+      expect(await q(`SELECT status FROM stay WHERE id = '${credit}'`)).toEqual([{ status: 'checked_out' }]);
+      expect(await paymentsOf(credit)).toEqual([
+        { method: 'cash', amount: 2_000_000 },
+        { method: 'cash', amount: -1_500_000 },
+      ]);
+    },
+    LONG,
+  );
+
+  it(
+    'near-miss guests are left alone: another name on S-1 and the same name on a unit that is not S-1 or S-2',
+    async () => {
+      const s = await afterFirstRun();
+      const t = await fd.pricedType('FD', 1);
+      const nearMiss = await inHouseOn(s.plan, s.s1, { firstName: 'Smoke', lastName: 'Test 1b2' });
+      const elsewhere = await inHouseOn(t.planId, t.unitIds[0], SMOKE_HOLDER);
+      for (const id of [nearMiss, elsewhere]) {
+        expect((await fd.post(`/stays/${id}/folio/charges`, { kind: 'service', description: 'Tuđe', amountMinor: 70_000, key: `near-${id.slice(0, 8)}-charge` })).status).toBe(201);
+      }
+      const out = await smoke(['--allow-close']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +leftovers: nema ostataka iz ranijih pokretanja$/m);
+      for (const id of [nearMiss, elsewhere]) {
+        expect(await q(`SELECT status FROM stay WHERE id = '${id}'`)).toEqual([{ status: 'in_house' }]);
+        expect(await paymentsOf(id)).toEqual([]);
+      }
+    },
+    LONG,
+  );
+
+  it(
+    'when S-1 is taken the stay goes to S-2; when both are taken the run stops',
+    async () => {
+      const s = await afterFirstRun();
+      await fd.bookStay({ typeId: '', planId: s.plan, unitId: s.s1 }, '2026-11-03', '2026-11-04', { holder: { firstName: 'Drugi', lastName: 'Gost' } });
+      const second = await smoke(['--allow-close']);
+      expect(second.stdout).not.toMatch(/FAIL/);
+      expect(second.stdout).toMatch(/^OK +reservation: .*, S-2$/m);
+      const third = await smoke(['--allow-close']);
+      expect(third.code).toBe(1);
+      expect(third.stdout).toMatch(/^FAIL reservation: S-1 i S-2 su zauzete za tu noć$/m);
+    },
+    LONG,
+  );
+
+  it(
+    'an inactive type, unit or plan SMOKE stops the run with its own message',
+    async () => {
+      await afterFirstRun();
+      const cases: Array<[string, string, RegExp]> = [
+        [`UPDATE unit_type SET active = false WHERE code = 'SMOKE'`, `UPDATE unit_type SET active = true WHERE code = 'SMOKE'`, /^FAIL unit type SMOKE: tip SMOKE postoji ali je isključen/m],
+        [`UPDATE unit SET active = false WHERE name = 'S-1'`, `UPDATE unit SET active = true WHERE name = 'S-1'`, /^FAIL unit type SMOKE: jedinica S-1 postoji ali nije aktivna SMOKE jedinica$/m],
+        [`UPDATE rate_plan SET active = false WHERE code = 'SMOKE'`, `UPDATE rate_plan SET active = true WHERE code = 'SMOKE'`, /^FAIL rate plan SMOKE: plan SMOKE postoji ali je isključen$/m],
+      ];
+      for (const [off, on, expected] of cases) {
+        await q(off);
+        const out = await smoke(['--allow-close']);
+        await q(on);
+        expect(out.code).toBe(1);
+        expect(out.stdout).toMatch(expected);
+      }
+    },
+    LONG,
+  );
+
+  it(
+    'a receptionist is refused: refunds and corrections need an owner or a manager',
+    async () => {
+      const rec = await seedUser(fd.ta.testDb, 'receptionist');
+      setClock(new Date(clock.getTime() + 60_000));
+      const out = await node(SMOKE_1B, ['--api', api, '--email', rec.email, '--totp', '000000'], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL sign-in: prijavljen kao receptionist; potreban je vlasnik ili menadžer/m);
+    },
+    LONG,
+  );
+
+  it(
+    'a manager passes the role check and runs the whole smoke',
+    async () => {
+      const manager = await seedUser(fd.ta.testDb, 'manager', { email: 'menadzer@hotel.test' });
+      setClock(new Date(clock.getTime() + 60_000));
+      const out = await node(SMOKE_1B, ['--api', api, '--email', manager.email, '--totp', totpGenerate(manager.totpSecret!, clock), '--allow-close'], {
+        HOTEL_SMOKE_PASSWORD: PASSWORD,
+      });
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +sign-in$/m);
+    },
+    LONG,
+  );
+
+  it(
+    'a reservation left expected by a failed run for the open day is taken up again instead of booking another',
+    async () => {
+      expect((await smoke(['--allow-close'])).code).toBe(0); // creates SMOKE, closes 2026-11-02; the day is now 2026-11-03
+      const [{ unit, plan }] = await q<{ unit: string; plan: string }>(
+        `SELECT (SELECT id FROM unit WHERE name = 'S-1') AS unit, (SELECT id FROM rate_plan WHERE code = 'SMOKE') AS plan`,
+      );
+      await fd.bookStay({ typeId: '', planId: plan, unitId: unit }, '2026-11-03', '2026-11-04', {
+        holder: { firstName: 'Smoke', lastName: 'Test 1b' },
+      });
+      const out = await smoke(['--allow-close']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^OK +reservation: .*nastavlja se/m);
+      expect(await smokeReservations()).toEqual([{ stay: 'checked_out' }, { stay: 'checked_out' }]);
+    },
+    LONG,
+  );
+
+  it(
+    'a confirmation that is not sent yet is shown with its status instead of failing the run',
+    async () => {
+      const out = await smoke(['--allow-close', '--mail-to', 'gost@hotel.test', '--mail-wait', '1']);
+      expect(out.stdout).not.toMatch(/FAIL/);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/^SKIP confirmation message: .*pending/m);
+      expect(out.stdout).toMatch(/^OK +smoke 1b je prošao$/m);
+      expect(out.stdout + out.stderr).not.toContain('gost@hotel.test');
+    },
+    LONG,
+  );
+
+  describe('licence', () => {
+    it('without the hotel.folio module it stops at the licence step', async () => {
+      await fd.reset({ modules: ['hotel.core'] });
+      await seedOwner();
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL licence: licenca nema modul hotel\.folio$/m);
+      expect(out.stdout).not.toMatch(/leftovers/);
+    }, LONG);
+
+    it('an expired licence is refused (the smoke needs VALID or GRACE)', async () => {
+      fd.shiftLicence(400 * DAY_MS);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL licence: licenca je EXPIRED; smoke traži VALID ili GRACE$/m);
+    }, LONG);
+  });
+
+  describe('checks on what the run leaves behind', () => {
+    // Corrupt data made on purpose, inside the test database: the API's own
+    // invariants (check-out needs balance 0, one accommodation line per night)
+    // make these branches unreachable through the API.
+    const trigger = async (sql: string) => {
+      await fd.sql(sql);
+    };
+
+    it('a receipt with something still due fails on dueMinor', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_close() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO folio_line (property_id, folio_id, kind, description, amount_minor, business_date, source_type)
+          VALUES (NEW.property_id, NEW.id, 'service', 'trigger', 100, current_date, 'manual');
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_close AFTER UPDATE ON folio FOR EACH ROW
+        WHEN (OLD.status = 'open' AND NEW.status = 'closed') EXECUTE FUNCTION t14_on_close()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL receipt: dueMinor je 100 \(očekivano 0\)$/m);
+    }, LONG);
+
+    it('a document without the "not a fiscal receipt" notice fails the receipt step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_document() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.content := jsonb_set(NEW.content, '{notice}', '"Fiskalni račun"');
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_document BEFORE INSERT ON folio_document FOR EACH ROW EXECUTE FUNCTION t14_on_document()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL receipt: dokument nema oznaku "Ovo nije fiskalni račun\."$/m);
+    }, LONG);
+
+    it('a document number of another shape fails the receipt step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_document() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.number := 'X-1';
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_document BEFORE INSERT ON folio_document FOR EACH ROW EXECUTE FUNCTION t14_on_document()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL receipt: broj dokumenta X-1 nije oblika N-GGGG-NNNNNN$/m);
+    }, LONG);
+
+    it('a second accommodation line fails the "exactly one night" check', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_close() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO folio_line (property_id, folio_id, kind, description, amount_minor, night, business_date, source_type)
+          VALUES (NEW.property_id, NEW.id, 'accommodation', 'trigger', 100, DATE '2030-01-01', current_date, 'manual');
+          INSERT INTO payment (property_id, folio_id, method, amount_minor, business_date, idempotency_key, request_hash)
+          VALUES (NEW.property_id, NEW.id, 'cash', 100, current_date, 't14-' || gen_random_uuid()::text, 'x');
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_close AFTER UPDATE ON folio FOR EACH ROW
+        WHEN (OLD.status = 'open' AND NEW.status = 'closed') EXECUTE FUNCTION t14_on_close()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL folio check: stavki smeštaja je 2 \(očekivano 1\)$/m);
+    }, LONG);
+
+    it('a folio with a balance after the receipt fails the folio check', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_document() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO folio_line (property_id, folio_id, kind, description, amount_minor, business_date, source_type)
+          VALUES (NEW.property_id, NEW.folio_id, 'service', 'trigger', 100, current_date, 'manual');
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_document AFTER INSERT ON folio_document FOR EACH ROW EXECUTE FUNCTION t14_on_document()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL folio check: saldo je 100, očekivano 0$/m);
+    }, LONG);
+
+    it('a folio that is not closed fails the folio check', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_document() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          UPDATE folio SET status = 'open', closed_at = NULL WHERE id = NEW.folio_id;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_document AFTER INSERT ON folio_document FOR EACH ROW EXECUTE FUNCTION t14_on_document()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL folio check: folio nije zatvoren \(status open\)$/m);
+    }, LONG);
+
+    it('a close that opens another day than the next one fails the "next day" check', async () => {
+      expect((await smoke()).code).toBe(0); // opens 2026-11-02 and leaves it open
+      await jump(new Date('2026-11-04T08:00:00Z'));
+      await trigger(`
+        CREATE FUNCTION t14_on_day() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM business_day WHERE property_id = NEW.property_id AND status = 'closed') THEN
+            NEW.day := NEW.day + 1;
+          END IF;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_day BEFORE INSERT ON business_day FOR EACH ROW EXECUTE FUNCTION t14_on_day()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(
+        /^FAIL business day: posle zatvaranja 2026-11-02 otvoren je dan 2026-11-04, očekivano 2026-11-03$/m,
+      );
+    }, LONG);
+
+    it('a stored charge of another amount than the one sent fails the charge step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_line() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.description = 'Smoke mini bar' THEN NEW.amount_minor := 60000; END IF;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_line BEFORE INSERT ON folio_line FOR EACH ROW EXECUTE FUNCTION t14_on_line()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL charge: zaduženje je 60000$/m);
+    }, LONG);
+
+    it('a stored cash payment of another amount than the one sent fails the payment step', async () => {
+      await trigger(`
+        CREATE FUNCTION t14_on_payment() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.method = 'cash' THEN NEW.amount_minor := 40000; END IF;
+          RETURN NEW;
+        END $$`);
+      await trigger(`CREATE TRIGGER t14_on_payment BEFORE INSERT ON payment FOR EACH ROW EXECUTE FUNCTION t14_on_payment()`);
+      const out = await smoke(['--allow-close']);
+      expect(out.code).toBe(1);
+      expect(out.stdout).toMatch(/^FAIL cash payment: uplata je 40000$/m);
+    }, LONG);
+  });
+
+  describe('arguments', () => {
+    it('--help says plainly, in Serbian, what --allow-close does to real data', async () => {
+      const out = await node(SMOKE_1B, ['--help']);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toContain('--allow-close');
+      expect(out.stdout).toMatch(/trajno/);
+      expect(out.stdout).toMatch(/no-show/);
+      expect(out.stdout).toMatch(/potvrđen/);
+    });
+
+    it('refuses a --mail-to that is not an address', async () => {
+      const out = await node(SMOKE_1B, ['--api', api, '--email', owner.email, '--mail-to', 'nije-adresa'], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+      expect(out.code).toBe(1);
+      expect(out.stderr).toMatch(/--mail-to nije ispravna e-adresa/);
+    });
+
+    it('refuses a --mail-wait outside 0-300 seconds', async () => {
+      const out = await node(SMOKE_1B, ['--api', api, '--email', owner.email, '--mail-wait', '999'], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+      expect(out.code).toBe(1);
+      expect(out.stderr).toMatch(/--mail-wait mora biti od 0 do 300 sekundi/);
+    });
+
+    it.each(['abc', '-1'])('refuses a --mail-wait that is not a number or is negative (%s)', async (value) => {
+      const out = await node(SMOKE_1B, ['--api', api, '--email', owner.email, '--mail-wait', value], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+      expect(out.code).toBe(1);
+      expect(out.stderr).toMatch(/--mail-wait mora biti od 0 do 300 sekundi/);
+    });
+
+    it('--help names the close of today, the no-show of arrivals and the first night', async () => {
+      const out = await node(SMOKE_1B, ['--help']);
+      expect(out.stdout).toMatch(/DANAŠNJI dan/);
+      expect(out.stdout).toMatch(/Prvo noćenje se može naplatiti/);
+      expect(out.stdout).not.toMatch(/--password/);
+    });
+
+    it('refuses to start without --api, --email or a password; without a TOTP it stops at sign-in', async () => {
+      const noEmail = await node(SMOKE_1B, ['--api', api], { HOTEL_SMOKE_PASSWORD: PASSWORD });
+      expect(noEmail.code).toBe(1);
+      expect(noEmail.stderr).toMatch(/--email je obavezan/);
+      const noPassword = await node(SMOKE_1B, ['--api', api, '--email', owner.email]);
+      expect(noPassword.code).toBe(1);
+      expect(noPassword.stderr).toMatch(/HOTEL_SMOKE_PASSWORD/);
+      const noTotp = await smoke([], { totp: false });
+      expect(noTotp.code).toBe(1);
+      expect(noTotp.stdout).toMatch(/^FAIL sign-in: dajte --totp <kod> ili --totp-file <fajl>/m);
+    }, LONG);
+  });
+});
+
+describe('scripts/smoke-1b.mjs with Turnstile switched on (e2e)', () => {
+  let ta: TestApp;
+  let api: string;
+
+  beforeAll(async () => {
+    ta = await createTestApp({
+      turnstile: { siteKey: 'site-key-1b', secretKey: 'secret-key-1b', verifyUrl: 'http://127.0.0.1:9', timeoutMs: 400, hostnames: null },
+    });
+    await ta.app.listen(0, '127.0.0.1');
+    api = `http://127.0.0.1:${(ta.app.getHttpServer().address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await ta?.app.close();
+  });
+
+  it('refuses at sign-in: the smoke sends no Turnstile token', async () => {
+    await ta.reset();
+    const owner = await seedUser(ta.testDb, 'owner');
+    const out = await node(
+      SMOKE_1B,
+      ['--api', api, '--email', owner.email, '--totp', totpGenerate(owner.totpSecret!, new Date())],
+      { HOTEL_SMOKE_PASSWORD: PASSWORD },
+    );
+    expect(out.code).toBe(1);
+    expect(out.stdout).toMatch(/^OK +health$/m);
+    expect(out.stdout).toMatch(/^FAIL sign-in: Turnstile je uključen; smoke radi samo bez TURNSTILE_\* ključeva$/m);
+    expect(out.stdout).not.toMatch(/licence/);
+  }, 60_000);
 });
