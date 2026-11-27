@@ -164,14 +164,12 @@ Na NAS-u za testove ostaje samo `hotel-postgres-test-claude`; `/volume1/ci/hotel
   potvrđeni dolasci do tog dana (uključujući njega) koji nisu prijavljeni postaju no-show, prva noć se može
   naplatiti, a recepcija prelazi na sutra. Treće pokretanje na istom poslovnom danu pada jer su S-1 i S-2
   zauzete. Ostavlja prave podatke (gost „Smoke Test 1b", zatvoreni dani, nefiskalni računi `N-…`).
-- Kod za ručno pokretanje baza: `git archive HEAD | ssh … "tar -x -C /volume1/ci/hotel/src"` (pre toga `rm -rf` samo
-  `/volume1/ci/hotel/src`).
 - Lozinke: `/volume1/ci/hotel/hotel.env` (`600`, nasumične, napravljene 2026-10-26). Pravi se samo jednom
   i posle se ne menja, jer baze već imaju podatke sa tim lozinkama. Lozinke se ne ispisuju i ne kopiraju
   u repo. `deploy.sh` mu samo dodaje `HOTEL_SECRET_KEY`, `HOTEL_ROOT_KEYSET` i `DATABASE_URL` kad
   nedostaju; postojeće vrednosti ne menja. Proverava se samo po imenima ključeva (`cut -d= -f1`).
 - Ručno pokretanje baza i Redisa (samo ta tri servisa; `api` i `web` podiže isključivo `deploy.sh`):
-  `/usr/local/bin/docker compose -f /volume1/ci/hotel/src/infrastructure/docker/docker-compose.yml
+  `/usr/local/bin/docker compose -f /volume1/ci/hotel/deploy/infrastructure/docker/docker-compose.yml
   --env-file /volume1/ci/hotel/hotel.env up -d --no-recreate --wait postgres hub-postgres redis`.
 - Redis nema lozinku; dostupan je samo na `127.0.0.1` NAS-a i u mreži `hotel-network-claude`.
 - Provera lozinke radi se preko Docker mreže (iz drugog kontejnera). Unutar Postgres kontejnera
